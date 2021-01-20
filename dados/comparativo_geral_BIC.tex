@@ -1,0 +1,133 @@
+% Aplicação: Quebra de Barragens 
+% fonte:     0_Dissertacao/Aplicacoes/Barragens/artigo/full_nonpar/full_nonpar.org 
+
+% Modelo: VF em função de VT 
+%   Coeficientes de dependência 
+\newcommand{\VFVTRhoPearson}{0.91369} 
+\newcommand{\VFVTRhoSpearman}{0.82554} 
+\newcommand{\VFVTTauKendall}{0.67208} 
+
+%   Marginais padronizadas pelas pseudo-observações 
+
+%     Estimação Semi-Paramétrica da cópula 
+%       Máxima Pseudo-Verossimilhança - via função copula::copula 
+\newcommand{\VFVTSemiparPobsFamilia}{normal} 
+\newcommand{\VFVTSemiparPobsTheta}{0.875} 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\VFVTSemiparPobsBIC}{17.619}
+
+%     Estimação Não-Paramétrica - via função kdecopula::kdecop 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\VFVTNonparPobsBICMethodT}{21.218}
+\newcommand{\VFVTNonparPobsBICMethodTLLum}{16.589}
+\newcommand{\VFVTNonparPobsBICMethodTLLdois}{12.92}
+
+%   Marginais padronizadas pelas densidades de Kernel 
+
+%     Kernel mais adequado (segundo Distância de Kolmogorov-Smirnoff) por variável 
+\newcommand{\VFKernelNome}{triw} 
+\newcommand{\VFKernelKS}{0.244} 
+\newcommand{\VTKernelNome}{triw} 
+\newcommand{\VTKernelKS}{0.201} 
+
+%     Estimação Semi-Paramétrica da cópula 
+%       Máxima Pseudo-Verossimilhança - via função copula::copula 
+\newcommand{\VFVTSemiparKernFamilia}{clayton} 
+\newcommand{\VFVTSemiparKernTheta}{6.339} 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\VFVTSemiparKernBIC}{26.083}
+
+%     Estimação Não-Paramétrica - via função kdecopula::kdecop 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\VFVTNonparKernBICMethodT}{29.68}
+\newcommand{\VFVTNonparKernBICMethodTLLum}{25.196}
+\newcommand{\VFVTNonparKernBICMethodTLLdois}{23.334}
+
+% ---------------------------------------------------------------------------------------- 
+
+% Modelo: Dmax em função de Rf 
+%   Coeficientes de dependência 
+\newcommand{\DmaxRfRhoPearson}{0.9586} 
+\newcommand{\DmaxRfRhoSpearman}{0.76906} 
+\newcommand{\DmaxRfTauKendall}{0.58581} 
+
+%   Marginais padronizadas pelas pseudo-observações 
+
+%     Estimação Semi-Paramétrica da cópula 
+%       Máxima Pseudo-Verossimilhança - via função copula::copula 
+\newcommand{\DmaxRfSemiparPobsFamilia}{normal} 
+\newcommand{\DmaxRfSemiparPobsTheta}{0.799} 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRfSemiparPobsBIC}{11.306}
+
+%     Estimação Não-Paramétrica - via função kdecopula::kdecop 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRfNonparPobsBICMethodT}{14.392}
+\newcommand{\DmaxRfNonparPobsBICMethodTLLum}{9.88}
+\newcommand{\DmaxRfNonparPobsBICMethodTLLdois}{6.673}
+
+%   Marginais padronizadas pelas densidades de Kernel 
+
+%     Kernel mais adequado (segundo Distância de Kolmogorov-Smirnoff) por variável 
+\newcommand{\DmaxKernelNome}{triw} 
+\newcommand{\DmaxKernelKS}{0.095} 
+\newcommand{\RfKernelNome}{triw} 
+\newcommand{\RfKernelKS}{0.162} 
+
+%     Estimação Semi-Paramétrica da cópula 
+%       Máxima Pseudo-Verossimilhança - via função copula::copula 
+\newcommand{\DmaxRfSemiparKernFamilia}{clayton} 
+\newcommand{\DmaxRfSemiparKernTheta}{2.694} 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRfSemiparKernBIC}{11.365}
+
+%     Estimação Não-Paramétrica - via função kdecopula::kdecop 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRfNonparKernBICMethodT}{13.663}
+\newcommand{\DmaxRfNonparKernBICMethodTLLum}{9.233}
+\newcommand{\DmaxRfNonparKernBICMethodTLLdois}{5.801}
+
+% ---------------------------------------------------------------------------------------- 
+
+% Modelo: Dmax em função de R 
+%   Coeficientes de dependência 
+\newcommand{\DmaxRRhoPearson}{0.92187} 
+\newcommand{\DmaxRRhoSpearman}{0.7078} 
+\newcommand{\DmaxRTauKendall}{0.52} 
+
+%   Marginais padronizadas pelas pseudo-observações 
+
+%     Estimação Semi-Paramétrica da cópula 
+%       Máxima Pseudo-Verossimilhança - via função copula::copula 
+\newcommand{\DmaxRSemiparPobsFamilia}{normal} 
+\newcommand{\DmaxRSemiparPobsTheta}{0.744} 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRSemiparPobsBIC}{9.84}
+
+%     Estimação Não-Paramétrica - via função kdecopula::kdecop 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRNonparPobsBICMethodT}{11.379}
+\newcommand{\DmaxRNonparPobsBICMethodTLLum}{5.899}
+\newcommand{\DmaxRNonparPobsBICMethodTLLdois}{0.898}
+
+%   Marginais padronizadas pelas densidades de Kernel 
+
+%     Kernel mais adequado (segundo Distância de Kolmogorov-Smirnoff) por variável 
+\newcommand{\DmaxVdoisKernelNome}{triw} 
+\newcommand{\DmaxVdoisKernelKS}{0.11} 
+\newcommand{\RKernelNome}{triw} 
+\newcommand{\RKernelKS}{0.196} 
+
+%     Estimação Semi-Paramétrica da cópula 
+%       Máxima Pseudo-Verossimilhança - via função copula::copula 
+\newcommand{\DmaxRSemiparKernFamilia}{clayton} 
+\newcommand{\DmaxRSemiparKernTheta}{2.386} 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRSemiparKernBIC}{10.503}
+
+%     Estimação Não-Paramétrica - via função kdecopula::kdecop 
+%       Bondade de ajuste - Bayesian Information Criterion (BIC) 
+\newcommand{\DmaxRNonparKernBICMethodT}{12.1}
+\newcommand{\DmaxRNonparKernBICMethodTLLum}{7.437}
+\newcommand{\DmaxRNonparKernBICMethodTLLdois}{4.182}
+

@@ -1,0 +1,3991 @@
+#+TITLE: Quebras de Barragens @@latex:\\@@ Estimação Não-Paramétrica Completa
+#+AUTHOR: Rafael Rodrigues de Moraes @@latex:\\@@  Verónica Andréa González-López
+#+STARTUP: inlineimages
+#+LANGUAGE: pt
+#+OPTIONS: H:3 num:n @:t \n:t ::t |:t ':t ^:nil f:t *:t TeX:t LaTeX:t
+#+OPTIONS: date:t author:t toc:t
+
+# ---- Específico do LaTeX -------
+#+LATEX_CLASS_OPTIONS: [12pt]
+#+LATEX_HEADER: \usepackage[a4paper, left=15mm, top=15mm, right=15mm, bottom=20mm]{geometry}
+#+LaTeX_HEADER: \usepackage{lmodern}
+#+LaTeX_HEADER: \usepackage[portuguese]{babel}
+#+LaTeX_HEADER: \usepackage{longtable}
+#+LaTeX_HEADER: \usepackage{xcolor}		        % Controle das cores
+#+LaTeX_HEADER: \usepackage{soulutf8}		    % cor de fundo de palavras com acentuação
+#+LaTeX_HEADER: \usepackage{graphicx}			% Inclusão de gráficos
+
+# --- bibliografia ---
+#+LaTeX_HEADER: \usepackage[abnt-emphasize=bf,alf]{abntex2cite}
+
+# --- Sumário
+#+LaTeX:  \renewcommand{\contentsname}{Sumário}
+
+# --- Definições, Teoremas, Lemas etc... ---
+#+LaTeX_HEADER: \usepackage{mathtools}
+#+LaTeX_HEADER: \usepackage{amsthm}
+#+LaTeX_HEADER: \newtheorem*{notation}{Notação}
+
+#+LaTeX_HEADER: \theoremstyle{definition}
+#+LaTeX_HEADER: \newtheorem{definition}{Definição}[section]
+
+#+LaTeX_HEADER: \theoremstyle{theorem}
+#+LaTeX_HEADER: \newtheorem{theorem}{Teorema}[section]
+
+#+LaTeX_HEADER: \theoremstyle{corollary}
+#+LaTeX_HEADER: \newtheorem{corollary}{Corolário}[theorem]
+
+#+LaTeX_HEADER: \theoremstyle{lemma}
+#+LaTeX_HEADER: \newtheorem{lemma}[theorem]{Lema}
+
+# ---- Fim do Preâmbulo ------>|
+
+#+BEGIN_SRC elisp :results silent :exports none
+;; exporta html como um arquivo só
+;; Fonte: https://www.reddit.com/r/orgmode/comments/7dyywu/creating_a_selfcontained_html/
+(defun org-html--format-image (source attributes info)
+  (format "<img src=\"data:image/%s;base64,%s\"%s />"
+      (or (file-name-extension source) "")
+      (base64-encode-string
+       (with-temp-buffer
+	 (insert-file-contents-literally source)
+	 (buffer-string)))
+      (file-name-nondirectory source)))
+
+#+END_SRC
+# --------------------------------------------------
+
+
+\pagebreak
+
+No artigo \citeonline{concha2018tailings} os autores abordam metodologias de previsão da extensão dos resíduos a ser atingida em caso de quebras de barragens. Esse tema é de preocupação contemporânea por causa de derramamentos recentes em território brasileiro e todos os problemas ambientais, sociais e políticos decorrentes de tais tragédias.
+
+* Bibliotecas, Importação e Seleção de variáveis
+** Bibliotecas no GNU R necessárias para a análise
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+library(copula)     # diversas funções relacionadas à estimação de cópulas
+library(kdecopula)  # estimação não paramétrica completa de cópulas
+library(ggplot2)    # gráficos com qualidade de publicação
+library(ggrepel)    # anotação nos gráficos
+library(dplyr)      # %>%
+library(snpar)      # kde
+library(tidyr)      # pivot_longer
+library(xtable)     # xtable
+casas.decimais <- 3
+#+END_SRC
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## função snpar::kde modificada para que o cálculo ocorra mesmo quando n < 5
+snpar.kde.mod <-
+function(x, h, xgrid, ngrid, kernel = c("epan", "unif","tria","quar",
+                                               "triw","tric","gaus","cos"), plot = FALSE)
+{
+  kernel <- match.arg(kernel)
+  if (!is.numeric(x)) 
+    stop("argument 'x' must be numeric") 
+  if (missing(xgrid) && missing(ngrid))
+    x.grid <- x[is.finite(x)]
+  if (missing(ngrid) && !missing(xgrid))
+    x.grid <- xgrid[is.finite(xgrid)]
+  if (missing(xgrid) && !missing(ngrid))
+    x.grid <- seq(min(x), max(x), length = ngrid)
+  if (!missing(xgrid) && !missing(ngrid))
+    stop("argument 'xgrid' and 'ngrid' cannot be both specified at the same time")
+  if (any(is.na(x)))
+    warning("missing values exist and have been removed")
+  n <- length(x)
+  ## if (n < 5L)
+  ##   stop("not enough 'x' data")
+  if (missing(h))
+    bw <- as.numeric((8*pi/3)^(1/5)*2.0362*(((quantile(x, 0.75) - 
+                      quantile(x, 0.25))/1.349)^(2/3))*n^(-1/5))
+  else
+  {
+    if (!is.numeric(h)) 
+      stop("bandwidth 'h' must be numeric")
+    else
+      bw <- h
+  }
+  funif <- function(u) 1/2*(abs(u) <= 1)
+  ftria <- function(u) (1 - abs(u))*(abs(u) <= 1)
+  fepan <- function(u) 3*(1 - u^2)/4*(abs(u) <= 1)
+  fquar <- function(u) 15*(1 - u^2)^2/16*(abs(u) <= 1)
+  ftriw <- function(u) 35*(1 - u^2)^3/32*(abs(u) <= 1)
+  ftric <- function(u) 70*(1 - abs(u)^3)^3/81*(abs(u) <= 1)
+  fgaus <- function(u) 1/sqrt(2*pi)*exp(-u^2/2)
+  fcos <- function(u) pi*cos(pi*u/2)/4*(abs(u) <= 1)
+  Funif <- function(u) (1/2 + u/2)*(abs(u) <= 1) + (u > 1)
+  Ftria <- function(u) (1/2 + u + u^2/2 - u^2*(u >= 0))*(abs(u) <= 1) + (u > 1) 
+  Fepan <- function(u) (1/2 + 3*u/4 - u^3/4)*(abs(u) <= 1) + (u > 1)
+  Fquar <- function(u) (3/16*u^5 - 5/8*u^3 + 15/16*u + 1/2)*(abs(u) <= 1) + (u > 1)
+  Ftriw <- function(u) 
+  {
+    (35*u/32 + 1/2 - 5*u^7/32 + 21*u^5/32 - 35*u^3/32)*(abs(u) <= 1) + (u > 1)
+  }
+  Ftric <- function(u) 
+  {
+    (1/2 + 70*u/81 + 7*u^10/81 - 14/81*u^10*(u >= 0) + 
+       10/27*u^7 + 35/54*u^4 - 35/27*u^4*(u >= 0))*(abs(u) <= 1) + (u > 1)
+  }
+  Fgaus <- function(u) pnorm(u)
+  Fcos <- function(u) (sin(pi/2)/2 + sin(pi*u/2)/2)*(abs(u) <= 1) + (u > 1)
+  U <- outer(x.grid, x, "-")/bw
+  PDF <- NULL; CDF <- NULL
+  for (i in 1:nrow(U))
+  {
+    PDF[i] <- switch(kernel, unif = mean(funif(U[i,]))/bw, tria = mean(ftria(U[i,]))/bw, 
+                     epan = mean(fepan(U[i,]))/bw, quar = mean(fquar(U[i,]))/bw,
+                     triw = mean(ftriw(U[i,]))/bw, tric = mean(ftric(U[i,]))/bw, 
+                     gaus = mean(fgaus(U[i,]))/bw, cos = mean(fcos(U[i,]))/bw)
+    CDF[i] <- switch(kernel, unif = mean(Funif(U[i,])), tria = mean(Ftria(U[i,])), 
+                     epan = mean(Fepan(U[i,])), quar = mean(Fquar(U[i,])), 
+                     triw = mean(Ftriw(U[i,])), tric = mean(Ftric(U[i,])),
+                     gaus = mean(Fgaus(U[i,])), cos = mean(Fcos(U[i,])))
+  }                   
+  x.PCDF <- cbind(x.grid, PDF, CDF) 
+  x.order <- x.PCDF[order(x.PCDF[,1]),]  
+  if (plot)
+  {
+    par(mfrow = c(2,1))
+    plot(x.order[,1],x.order[,2], type = "l", xlab = "xgrid",
+         ylab = "PDF", main = "kernel CDF estimation")
+    plot(x.order[,1],x.order[,3], type = "l", xlab = "xgrid",
+         ylab = "CDF", main = "kernel PDF estimation")
+    par(mfrow = c(1,1))
+  }  
+  return(list(data = x, xgrid = x.grid, fhat = PDF, Fhat = CDF, bw = bw)) 
+}
+#+END_SRC
+
+** Importação dos dados
+*** Dados originais (dams)                                         :noexport:
+	#+NAME: dams
+	#+ATTR_LATEX: :environment longtable :align c|c|c|c|c|c|c|c|p{2.2cm}|c
+ | No | Year |    H |    VT | Dmax |     VF | Failure Type | Source  | Mine Full Name                                                  | Mine                             |
+ |----+------+------+-------+------+--------+--------------+---------+-----------------------------------------------------------------+----------------------------------|
+ |  1 | 1973 |   43 |   0.5 |   25 |   0.17 | SI           | Rico    | (unidentified), Southwestern USA                                |                                  |
+ |  2 | 2000 |   15 |    15 |  5.2 |    1.8 | ER           | CB      | Aitik mine, Sweden (Boliden Ltd.)                               |                                  |
+ |  3 | 1978 |   25 |   1.7 |  0.3 | 0.0211 | OT           | Rico    | Arcturus (Zimbawe)                                              |                                  |
+ |  4 | 1974 |   20 |    13 |   45 |      3 | SE           | Rico    | Bafokeng, South Africa                                          |                                  |
+ |  5 | 1981 |   25 |    27 |  1.3 |    3.5 | SI           | CB      | Balka Chuficheva, Russia                                        |                                  |
+ |  6 | 1965 |   20 |  0.45 |  0.8 |   0.07 | EQ           | Rico    | Bellavista, Chile                                               |                                  |
+ |  7 | 1985 |    6 | 0.038 |  0.8 |  0.011 | OT           | CB      | Bonsal, North Carolina, USA                                     |                                  |
+ |  8 | 1965 |   20 |   0.5 |    5 |  0.085 | EQ           | Rico    | Cerro Negro No. (3 of 5)                                        |                                  |
+ |  9 | 1985 |   40 |     2 |    8 |    0.5 | EQ           | Rico    | Cerro Negro No. (4 of 5)                                        |                                  |
+ | 10 | 1979 |   11 |  0.37 |  110 |   0.37 | FN           | Rico/CB | Churchrock, New Mexico, United Nuclear                          | UNC Churchrock, NM, USA          |
+ | 11 | 1971 |   15 | 12.34 |  120 |      9 | SE           | Rico    | Cities Service, Fort Meade, Florida                             | Cities Service, FL, USA          |
+ | 12 | 1974 |   18 |   0.3 | 0.03 |  0.038 | SI           | CB      | Deneen Mica Yancey County, North Carolina, USA                  |                                  |
+ | 13 | 1965 |   19 |  0.35 |   12 |   0.35 | EQ           | CB      | El Cobre New Dam                                                |                                  |
+ | 14 | 1965 |   35 |  4.25 |   12 |    1.9 | EQ           | Rico    | El Cobre Old Dam                                                |                                  |
+ | 15 | 2015 |   90 |    55 |  637 |     32 | ST           | CB      | Fundão-Santarem, Minas Gerais, Brazil (Samarco)                 | Samarco Fundão-Santarém, MG, BRA |
+ | 16 | 1974 |    9 |    NA | 0.61 | 0.0038 | OT           | Rico    | Galena Mine (1974)                                              |                                  |
+ | 17 | 1966 |   11 |     7 |  0.3 |  0.085 | SE           | CB      | Gypsum Tailings Dam (Texas, USA)                                |                                  |
+ | 18 | 1968 |   12 |   0.3 | 0.15 |   0.09 | EQ           | Rico    | Hokkaido, Japan Imperial Metals, Mt                             |                                  |
+ | 19 | 2014 |   40 |    74 |    7 |   23.6 | FN           | CB      | Polley, British Columbia, Canada                                | Polley, BC, CAN                  |
+ | 20 | 1986 |   30 |    NA |   12 |    0.1 | ST           | Rico    | Itabirito (Brazil)                                              |                                  |
+ | 21 | 1965 |   15 |    NA |    5 |  0.035 | EQ           | Rico    | La Patagua New Dam (Chile)                                      |                                  |
+ | 22 | 1998 |   27 |    15 |   41 |    6.8 | FN           | CB      | Los Frailes, near Seville, Spain (Boliden Ltd.)                 |                                  |
+ | 23 | 1965 |   15 | 0.043 |    5 |  0.021 | EQ           | Rico    | Los Maquis No. 3                                                |                                  |
+ | 24 | 1994 |   31 |  7.04 |    4 |    0.6 | OT           | CB      | Merriespruit, South Africa (Harmony)-No. 4A Tailings Complex    |                                  |
+ | 25 | 1978 |   28 |  0.48 |    8 |   0.08 | EQ           | Rico    | Mochikoshi No. 1, Japan (1 of 2)                                |                                  |
+ | 26 | 1978 |   19 |    NA | 0.15 |  0.003 | EQ           | Rico    | Mochikoshi No. 2, Japan                                         |                                  |
+ | 27 | 1985 |    5 |  0.12 |  1.5 |  0.025 | SE           | Rico    | Olinghouse, Nevada, USA                                         |                                  |
+ | 28 | 1995 |   44 |  5.25 |   80 |    4.2 | ER           | Rico    | Omai Mine, No. 1,2,Guyana (Cambior)                             |                                  |
+ | 29 | 1985 | 29.5 |   0.3 |    8 |    0.2 | SI           | Rico    | Prestavel Mine-Stava, North Italy,2,3 (Prealpi Mineraria)       |                                  |
+ | 30 | 1996 |   45 |  1.52 |    6 |   0.22 | SI           | Rico    | Sgurigrad, Bulgaria                                             |                                  |
+ | 31 | 1989 |    9 | 0.074 |  0.1 |  0.038 | SI           | Rico    | Stancil, Maryland, USA                                          |                                  |
+ | 32 | 2008 | 50.7 |  0.29 |  2.5 |   0.19 | U            | CB      | Taoshi, Linfen City, Shanxi province, China (Tahsan Mining Co.) |                                  |
+ | 33 | 1994 |   24 |    NA | 0.18 |     NA | EQ           | Rico    | Tapo Canyon (USA)                                               |                                  |
+ | 34 | 1980 |   66 |   2.5 |    8 |      2 | SI           | Rico    | Tyrone, New Mexico (Phelps Dodge)                               |                                  |
+ | 35 | 1985 |   24 |   0.7 |    5 |   0.28 | EQ           | Rico    | Veta de Agua (Chile)                                            |                                  |
+
+*** Script de importação e tratamento dos dados no R
+   
+#+BEGIN_SRC R :exports code :results silent :var dt=dams :session full_nonpar
+## Tabela de nomes das minas
+names <- dt[ , c("No", "Mine") ]
+
+## data.frame base para análises (ainda contém NAs !)
+dt    <- dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "Mine") ]
+
+## Novas variáveis
+dt$R <- dt$H * dt$VF
+dt$Rf <- round( dt$H * ( dt$VF/dt$VT) * dt$VF, 2)
+
+## data.frame base para análises (ainda contém NAs !)
+dt    <- dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "R", "Rf", "Mine") ]
+#+END_SRC
+
+** Seleção de variáveis para modelagem externa ao artigo
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+## salva data.frame em '0_Dissertação/Aplicacoes/Barragens/artigo/full_nonpar/dados/barragens_dados.dat'
+write.table( 
+    data.frame(
+        dt
+    )
+   ,file='./dados/barragens_dados.dat'
+   ,sep='|'
+   ,row.names=FALSE
+   ,quote = FALSE
+)
+#+END_SRC
+
+\pagebreak
+
+
+* Descrição dos dados
+Os dados presentes no artigo em questão não necessitam de tratamento, exceto a exclusão de informações faltantes (/missing values/).
+
+Abaixo são listadas 11 observações do conjunto de dados utilizado nas análises. Ao todo estão disponíveis dados para src_R[:results raw values :session full_nonpar]{nrow(dt)}  quebras de barragens, dos quais src_R[:results raw values :session full_nonpar]{nrow(na.omit(dt))} são registros completos, ou seja, não há informação faltante em qualquer das colunas da tabela.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+set.seed(5)
+amostra <- sample( 1:nrow(dt), size=11)
+dt[sort(amostra),]
+#+END_SRC
+
+#+CAPTION: Trecho da tabela de dados usada na análise.
+#+RESULTS:
+| No | Year |  H |    VT | Dmax |     VF | R |      Rf | Mine                             |
+|----+------+----+-------+------+--------+------------+---------+----------------------------------|
+|  2 | 2000 | 15 |    15 |  5.2 |    1.8 |         27 |    3.24 |                                  |
+|  3 | 1978 | 25 |   1.7 |  0.3 | 0.0211 |     0.5275 |    0.01 |                                  |
+|  6 | 1965 | 20 |  0.45 |  0.8 |   0.07 |        1.4 |    0.22 |                                  |
+|  7 | 1985 |  6 | 0.038 |  0.8 |  0.011 |      0.066 |    0.02 |                                  |
+|  9 | 1985 | 40 |     2 |    8 |    0.5 |         20 |       5 |                                  |
+| 11 | 1971 | 15 | 12.34 |  120 |      9 |        135 |   98.46 | Cities Service, FL, USA          |
+| 15 | 2015 | 90 |    55 |  637 |     32 |       2880 | 1675.64 | Samarco Fundão-Santarém, MG, BRA |
+| 19 | 2014 | 40 |    74 |    7 |   23.6 |        944 |  301.06 | Polley, BC, CAN                  |
+| 21 | 1965 | 15 |   nil |    5 |  0.035 |      0.525 |     nil |                                  |
+| 23 | 1965 | 15 | 0.043 |    5 |  0.021 |      0.315 |    0.15 |                                  |
+| 25 | 1978 | 28 |  0.48 |    8 |   0.08 |       2.24 |    0.37 |                                  |
+
+
+* $V_F$ em função de $V_T$ 
+  
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+dt.sub <- na.omit(
+  dt[, c("VF","VT","No") ]
+)
+dt.sub <- merge(
+    dt.sub
+   ,names
+   ,by="No"
+)
+label      <- dt.sub$Mine
+
+varX       <- dt.sub$VT
+varX.pobs  <- rank( varX ) / ( length( varX ) + 1 )
+varX.label <- "VT"
+
+varY       <- dt.sub$VF
+varY.pobs  <- rank( varY ) / ( length( varY ) + 1 )
+varY.label <- "VF"
+#+END_SRC
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Gráfico de dispersão
+suppressMessages(
+  ggsave(
+    filename = paste0('./img/',varX.label,'_',varY.label,'_scatter_labels.pdf')
+   ,plot = ggplot(
+      data.frame(
+        varX
+       ,varY
+       ,label=ifelse(varY>8,label,"")
+      )
+     ,aes(
+        varX
+       ,varY
+       ,label=label
+      )
+    ) +
+      labs(x=varX.label, y=varY.label)+
+      geom_point(shape=19, color="black", size=2) +
+      theme_bw() +
+      theme( text = element_text(size=12),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_text(hjust = 0.5)
+            )+
+      geom_text_repel()
+   ,device="pdf"
+   ,width=5
+   ,height=5
+  )
+)
+#+END_SRC
+
+\pagebreak
+
+** Estimação das marginais
+
+A estimação das marginais src_R[:results raw values :session full_nonpar]{varY.label} e src_R[:results raw values :session full_nonpar]{varX.label} se dará não-parametricamente de duas formas: (1) via pseudo-observações e (2) via densidades de kernel. 
+
+Com base no pacote =snpar= do software =GNU R= estimou-se a função densidade de probabilidade com base em diferentes funções de kernel e, finalmente, obteve-se uma estimativa para a função distribuição acumulada, calculada a partir da função densidade de kernel.
+
+*** src_R[:results raw values :session full_nonpar]{varY.label}
+
+Na tabela abaixo é apresentada uma comparação entre as pseudo-observações e as funções de distribuição acumulada para os diferentes kernels.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+kdeVarY <- data.frame(
+  varY
+ ,pobs = rank( varY ) / ( length( varY ) + 1 )
+ ,epan = snpar::kde( x = varY, kernel='epan', plot=FALSE)$Fhat
+ ,unif = snpar::kde( x = varY, kernel='unif', plot=FALSE)$Fhat
+ ,tria = snpar::kde( x = varY, kernel='tria', plot=FALSE)$Fhat
+ ,quar = snpar::kde( x = varY, kernel='quar', plot=FALSE)$Fhat
+ ,triw = snpar::kde( x = varY, kernel='triw', plot=FALSE)$Fhat
+ ,tric = snpar::kde( x = varY, kernel='tric', plot=FALSE)$Fhat
+ ,gaus = snpar::kde( x = varY, kernel='gaus', plot=FALSE)$Fhat
+ ,cos  = snpar::kde( x = varY, kernel='cos' , plot=FALSE)$Fhat
+)
+colnames(kdeVarY)[1] <- varY.label
+
+kdeVarY[ order(kdeVarY[,1]) , ] %>% round(., casas.decimais)
+#+END_SRC
+
+#+RESULTS:
+|    VF |  pobs |  epan |  unif |  tria |  quar |  triw |  tric |  gaus |   cos |
+|-------+-------+-------+-------+-------+-------+-------+-------+-------+-------|
+| 0.011 | 0.032 | 0.293 | 0.309 | 0.284 | 0.284 | 0.276 | 0.287 | 0.333 | 0.292 |
+| 0.021 | 0.065 | 0.296 |  0.31 | 0.287 | 0.287 |  0.28 |  0.29 | 0.334 | 0.294 |
+| 0.021 | 0.097 | 0.296 |  0.31 | 0.287 | 0.287 |  0.28 |  0.29 | 0.334 | 0.294 |
+| 0.025 | 0.129 | 0.297 | 0.311 | 0.288 | 0.288 | 0.281 | 0.291 | 0.335 | 0.295 |
+| 0.038 | 0.177 |   0.3 | 0.314 | 0.292 | 0.292 | 0.286 | 0.295 | 0.337 | 0.299 |
+| 0.038 | 0.177 |   0.3 | 0.314 | 0.292 | 0.292 | 0.286 | 0.295 | 0.337 | 0.299 |
+|  0.07 | 0.226 | 0.308 |  0.32 | 0.302 | 0.302 | 0.297 | 0.304 | 0.342 | 0.307 |
+|  0.08 | 0.258 | 0.311 | 0.322 | 0.306 | 0.305 | 0.301 | 0.307 | 0.343 |  0.31 |
+| 0.085 | 0.306 | 0.312 | 0.323 | 0.307 | 0.307 | 0.302 | 0.308 | 0.344 | 0.311 |
+| 0.085 | 0.306 | 0.312 | 0.323 | 0.307 | 0.307 | 0.302 | 0.308 | 0.344 | 0.311 |
+|  0.09 | 0.355 | 0.313 | 0.324 | 0.309 | 0.308 | 0.304 |  0.31 | 0.345 | 0.312 |
+|  0.17 | 0.387 | 0.334 | 0.339 | 0.334 | 0.333 | 0.333 | 0.333 | 0.357 | 0.334 |
+|  0.19 | 0.419 | 0.339 | 0.343 | 0.341 |  0.34 |  0.34 | 0.339 |  0.36 | 0.339 |
+|   0.2 | 0.452 | 0.342 | 0.345 | 0.344 | 0.343 | 0.344 | 0.342 | 0.362 | 0.342 |
+|  0.22 | 0.484 | 0.347 | 0.349 |  0.35 | 0.349 | 0.351 | 0.348 | 0.365 | 0.348 |
+|  0.28 | 0.516 | 0.363 | 0.361 | 0.369 | 0.368 | 0.373 | 0.365 | 0.374 | 0.364 |
+|  0.35 | 0.548 | 0.381 | 0.374 | 0.391 |  0.39 | 0.398 | 0.386 | 0.385 | 0.383 |
+|  0.37 | 0.581 | 0.387 | 0.378 | 0.398 | 0.396 | 0.405 | 0.392 | 0.388 | 0.388 |
+|   0.5 | 0.613 | 0.421 | 0.403 | 0.437 | 0.436 |  0.45 |  0.43 | 0.408 | 0.424 |
+|   0.6 | 0.645 | 0.447 | 0.423 | 0.466 | 0.467 | 0.483 |  0.46 | 0.423 | 0.451 |
+|   1.8 | 0.677 | 0.699 | 0.664 | 0.702 | 0.707 | 0.709 | 0.709 | 0.597 | 0.701 |
+|   1.9 |  0.71 | 0.711 | 0.685 | 0.713 | 0.716 | 0.717 | 0.717 |  0.61 | 0.712 |
+|     2 | 0.742 | 0.721 | 0.706 | 0.722 | 0.723 | 0.724 | 0.723 | 0.622 | 0.721 |
+|     3 | 0.774 | 0.785 |  0.78 | 0.785 | 0.787 | 0.787 | 0.787 | 0.726 | 0.785 |
+|   3.5 | 0.806 | 0.812 | 0.805 | 0.812 | 0.813 | 0.814 | 0.813 | 0.765 | 0.812 |
+|   4.2 | 0.839 | 0.838 | 0.833 |  0.84 | 0.842 | 0.844 | 0.841 | 0.806 | 0.839 |
+|   6.8 | 0.871 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.881 | 0.883 |
+|     9 | 0.903 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.912 | 0.917 |
+|  23.6 | 0.935 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |
+|    32 | 0.968 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 |
+
+Abaixo apresenta-se a distância de Kolmogorov-Smirnoff entre a FDA empírica e a FDA calculada com base nas diferentes funções de kernel, ou seja, $\max | \hat{F}(x) - F_k^*(x) |$, sendo $\hat{F}(x)$ a função distribuição acumulada empírica e $F_k^*(x)$ a função distribuição acumulada obtida a partir da função densidade do kernel $k$, com $k=$ epanechnikov, uniform, quartic, triagular, triweight, gaussian, cosine e tricube. 
+
+#+BEGIN_SRC R :exports results :results values :colnames yes :session full_nonpar
+(varY_KS <- kdeVarY %>%
+   pivot_longer(
+     -c(varY.label,'pobs')
+    ,names_to = 'kernel'
+    ,values_to = 'step'
+   ) %>%
+   mutate(
+     kernel_nome = case_when(
+       kernel == 'triw' ~ 'Triweight'
+      ,kernel == 'quar' ~ 'Quartic'
+      ,kernel == 'tria' ~ 'Triangular'
+      ,kernel == 'tric' ~ 'Tricube'
+      ,kernel == 'cos'  ~ 'Cosine'
+      ,kernel == 'epan' ~ 'Epanechnikov'
+      ,kernel == 'unif' ~ 'Uniform'
+      ,kernel == 'gaus' ~ 'Gaussian'
+      ,TRUE ~ as.character(kernel)
+     )
+    ,KS = round( abs( step - pobs), casas.decimais)
+   ) %>%
+   group_by( kernel_nome, kernel ) %>%
+   summarise(
+     max_distance_KS = max(KS)
+   ) %>%
+   arrange( max_distance_KS ) %>%
+   as.data.frame
+)
+#+END_SRC
+
+#+RESULTS:
+| kernel_nome  | kernel | max_distance_KS |
+|--------------+--------+-----------------|
+| Triweight    | triw   |           0.244 |
+| Quartic      | quar   |           0.251 |
+| Triangular   | tria   |           0.251 |
+| Tricube      | tric   |           0.254 |
+| Cosine       | cos    |           0.259 |
+| Epanechnikov | epan   |           0.261 |
+| Uniform      | unif   |           0.276 |
+| Gaussian     | gaus   |           0.301 |
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      kdeVarY[ order(kdeVarY[,1]) , ]
+     ,digits= c(0, rep( casas.decimais, ncol(kdeVarY) ))
+     ,align="rc|c|c|c|c|c|c|c|c|c|"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/", varY.label,"_CDFKernels_table.tex")
+)
+
+## Exporta tabela de comparação das estatísticas de Kolmogorov-Smirnoff por kernel
+capture.output(
+  print(
+    xtable(
+      varY_KS[,c('kernel_nome','max_distance_KS')]
+     ,digits= c(0, 0, casas.decimais)
+     ,align="c|c|c"
+    )
+   ,include.colnames=FALSE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/",varY.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+Como se pode notar, a função de kernel src_R[:results raw values :session full_nonpar]{varY_KS[1,'kernel_nome']} responde pela menor distância em relação à função distribuição acumulada empírica. 
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## variáveis globais para gráficos da análise exploratória de dados
+var.dados    <- varY  ; var.label    <- varY.label
+kernel.abrev <- varY_KS[ 1,'kernel']
+kernel.compl <- varY_KS[ 1,'kernel_nome']
+
+## https://rdrr.io/cran/snpar/src/R/kde.R
+kern <- snpar::kde( var.dados, kernel = kernel.abrev, plot=FALSE)
+kern <- cbind( kern$xgrid, kern$fhat, kern$Fhat)
+kern <- kern[ order( kern[,1]), ]
+
+## exporta gráficos para artigo
+ylim_max <- round( digits = 2
+                 ,max(
+                    max(kern[,2]) # maior valor da densidade da função de kernel
+                   ,max( hist( var.dados, plot=FALSE)$density ) # maior valor da densidade do histograma
+                  )
+                  ) * (1 + 0.15)
+
+## Histograma, boxplot e densidades de kernel para varY
+pdf(file = paste0( './img/', var.label, '_histogram.pdf'), width=5, height=5)
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(8,1))
+par(mar=c(4, 4.1, 1.1, 2.1))
+hist(
+  var.dados
+ ,prob=TRUE
+ ,n=15
+ ,ylim=c(0, ylim_max )
+ ,xlab=''
+ ,main=''
+ ,ylab='densidade'
+)
+lines(
+  kern[,1]
+ ,kern[,2]
+ ,col='blue'
+ ,lwd=2
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y= ylim_max / 2
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = c('blue')
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+par(mar=c(0, 4.1, 1.1, 2.1))
+boxplot(
+  var.dados
+ ,horizontal=TRUE
+ ,xaxt="n"
+ ,frame=F
+)
+graphics.off()
+
+## FDA Empírica e FDA aproximada a partir da densidade de kernel
+pdf(file = paste0( './img/', var.label, '_ecdf.pdf'), width=5, height=5)
+plot(
+  ecdf( var.dados )
+ ,main = ''
+ ,xlab = ''
+ ,ylab = 'distribuição acumulada'
+ ,pch=20
+)
+lines(
+  kern[,1]
+ ,kern[,3]
+ ,type='l'
+ ,col='blue'
+ ,lwd=2
+ ,ylim=c(0,1)
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y=0.60
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = 'blue'
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+graphics.off()
+#+END_SRC
+
+*** src_R[:results raw values :session full_nonpar]{varX.label}
+
+Na tabela abaixo é apresentada uma comparação entre as pseudo-observações e as funções de distribuição acumulada para os diferentes kernels.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+kdeVarX <- data.frame(
+  varX
+ ,pobs = rank( varX ) / ( length( varX ) + 1 )
+ ,epan = snpar::kde( x = varX, kernel='epan', plot=FALSE)$Fhat
+ ,unif = snpar::kde( x = varX, kernel='unif', plot=FALSE)$Fhat
+ ,tria = snpar::kde( x = varX, kernel='tria', plot=FALSE)$Fhat
+ ,quar = snpar::kde( x = varX, kernel='quar', plot=FALSE)$Fhat
+ ,triw = snpar::kde( x = varX, kernel='triw', plot=FALSE)$Fhat
+ ,tric = snpar::kde( x = varX, kernel='tric', plot=FALSE)$Fhat
+ ,gaus = snpar::kde( x = varX, kernel='gaus', plot=FALSE)$Fhat
+ ,cos  = snpar::kde( x = varX, kernel='cos' , plot=FALSE)$Fhat
+)
+colnames(kdeVarX)[1] <- varX.label
+
+kdeVarX[ order(kdeVarX[,1]) , ] %>% round(., casas.decimais)
+#+END_SRC
+
+#+RESULTS:
+|    VT |  pobs |  epan |  unif |  tria |  quar |  triw |  tric |  gaus |   cos |
+|-------+-------+-------+-------+-------+-------+-------+-------+-------+-------|
+| 0.038 | 0.032 | 0.255 | 0.275 | 0.244 | 0.243 | 0.233 | 0.246 | 0.298 | 0.253 |
+| 0.043 | 0.065 | 0.256 | 0.276 | 0.245 | 0.243 | 0.234 | 0.246 | 0.298 | 0.253 |
+| 0.074 | 0.097 | 0.259 | 0.278 | 0.249 | 0.247 | 0.238 |  0.25 |   0.3 | 0.257 |
+|  0.12 | 0.129 | 0.264 | 0.281 | 0.254 | 0.253 | 0.244 | 0.255 | 0.303 | 0.261 |
+|  0.29 | 0.161 | 0.281 | 0.294 | 0.275 | 0.273 | 0.268 | 0.275 | 0.313 | 0.279 |
+|   0.3 | 0.226 | 0.282 | 0.294 | 0.276 | 0.274 | 0.269 | 0.276 | 0.314 |  0.28 |
+|   0.3 | 0.226 | 0.282 | 0.294 | 0.276 | 0.274 | 0.269 | 0.276 | 0.314 |  0.28 |
+|   0.3 | 0.226 | 0.282 | 0.294 | 0.276 | 0.274 | 0.269 | 0.276 | 0.314 |  0.28 |
+|  0.35 |  0.29 | 0.287 | 0.298 | 0.283 | 0.281 | 0.276 | 0.281 | 0.317 | 0.286 |
+|  0.37 | 0.323 | 0.289 | 0.299 | 0.285 | 0.283 | 0.279 | 0.284 | 0.318 | 0.288 |
+|  0.45 | 0.355 | 0.297 | 0.305 | 0.295 | 0.293 |  0.29 | 0.293 | 0.323 | 0.296 |
+|  0.48 | 0.387 |   0.3 | 0.307 | 0.299 | 0.297 | 0.295 | 0.297 | 0.324 | 0.299 |
+|   0.5 | 0.435 | 0.302 | 0.309 | 0.301 | 0.299 | 0.297 | 0.299 | 0.326 | 0.302 |
+|   0.5 | 0.435 | 0.302 | 0.309 | 0.301 | 0.299 | 0.297 | 0.299 | 0.326 | 0.302 |
+|   0.7 | 0.484 | 0.323 | 0.323 | 0.326 | 0.324 | 0.326 | 0.322 | 0.338 | 0.323 |
+|  1.52 | 0.516 | 0.408 | 0.386 | 0.422 | 0.424 | 0.438 | 0.419 | 0.388 | 0.411 |
+|   1.7 | 0.548 | 0.426 |   0.4 | 0.442 | 0.445 | 0.461 |  0.44 | 0.399 |  0.43 |
+|     2 | 0.581 | 0.456 | 0.422 | 0.473 | 0.479 | 0.496 | 0.475 | 0.417 |  0.46 |
+|   2.5 | 0.613 | 0.504 | 0.461 | 0.521 |  0.53 | 0.547 | 0.528 | 0.447 | 0.509 |
+|  4.25 | 0.645 | 0.639 | 0.607 | 0.643 | 0.648 | 0.651 | 0.648 | 0.546 | 0.641 |
+|  5.25 | 0.677 |  0.68 | 0.672 |  0.68 | 0.681 | 0.682 | 0.682 | 0.595 |  0.68 |
+|     7 |  0.71 | 0.722 | 0.716 | 0.724 | 0.725 | 0.727 | 0.725 | 0.667 | 0.723 |
+|  7.04 | 0.742 | 0.723 | 0.717 | 0.725 | 0.726 | 0.728 | 0.726 | 0.669 | 0.723 |
+| 12.34 | 0.774 | 0.804 | 0.812 | 0.801 |   0.8 | 0.798 |   0.8 | 0.801 | 0.803 |
+|    13 | 0.806 | 0.817 | 0.821 | 0.815 | 0.814 | 0.812 | 0.814 | 0.813 | 0.816 |
+|    15 | 0.855 | 0.856 |  0.85 | 0.858 |  0.86 | 0.862 |  0.86 | 0.842 | 0.857 |
+|    15 | 0.855 | 0.856 |  0.85 | 0.858 |  0.86 | 0.862 |  0.86 | 0.842 | 0.857 |
+|    27 | 0.903 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.916 | 0.917 |
+|    55 | 0.935 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |
+|    74 | 0.968 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 |
+
+Abaixo apresenta-se a distância de Kolmogorov-Smirnoff entre a FDA empírica e a FDA calculada com base nas diferentes funções de kernel, ou seja, $\max | \hat{F}(x) - F_k^*(x) |$, sendo $\hat{F}(x)$ a função distribuição acumulada empírica e $F_k^*(x)$ a função distribuição acumulada obtida a partir da função densidade do kernel $k$, com $k=$ epanechnikov, uniform, quartic, triagular, triweight, gaussian, cosine e tricube. 
+
+#+BEGIN_SRC R :exports results :results values :colnames yes :session full_nonpar
+(varX_KS <- kdeVarX %>%
+   pivot_longer(
+     -c(varX.label,'pobs')
+    ,names_to = 'kernel'
+    ,values_to = 'step'
+   ) %>%
+   mutate(
+     kernel_nome = case_when(
+       kernel == 'triw' ~ 'Triweight'
+      ,kernel == 'quar' ~ 'Quartic'
+      ,kernel == 'tria' ~ 'Triangular'
+      ,kernel == 'tric' ~ 'Tricube'
+      ,kernel == 'cos'  ~ 'Cosine'
+      ,kernel == 'epan' ~ 'Epanechnikov'
+      ,kernel == 'unif' ~ 'Uniform'
+      ,kernel == 'gaus' ~ 'Gaussian'
+      ,TRUE ~ as.character(kernel)
+     )
+    ,KS = round( abs( step - pobs), casas.decimais)
+   ) %>%
+   group_by( kernel_nome, kernel ) %>%
+   summarise(
+     max_distance_KS = max(KS)
+   ) %>%
+   arrange( max_distance_KS ) %>%
+   as.data.frame
+)
+#+END_SRC
+
+#+RESULTS:
+| kernel_nome  | kernel | max_distance_KS |
+|--------------+--------+-----------------|
+| Triweight    | triw   |           0.201 |
+| Quartic      | quar   |            0.21 |
+| Triangular   | tria   |           0.212 |
+| Tricube      | tric   |           0.213 |
+| Cosine       | cos    |           0.221 |
+| Epanechnikov | epan   |           0.223 |
+| Uniform      | unif   |           0.243 |
+| Gaussian     | gaus   |           0.266 |
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      kdeVarX[ order(kdeVarX[,1]) , ]
+     ,digits= c(0, rep( casas.decimais, ncol(kdeVarX) ))
+     ,align="rc|c|c|c|c|c|c|c|c|c|"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/", varX.label,"_CDFKernels_table.tex")
+)
+
+## Exporta tabela de comparação das estatísticas de Kolmogorov-Smirnoff por kernel
+capture.output(
+  print(
+    xtable(
+      varX_KS[,c('kernel_nome','max_distance_KS')]
+     ,digits= c(0, 0, casas.decimais)
+     ,align="c|c|c|"
+    )
+   ,include.colnames=FALSE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/",varX.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+Como se pode notar, a função de kernel src_R[:results raw values :session full_nonpar]{varX_KS[1,'kernel']} responde pela menor distância em relação à função distribuição acumulada empírica. 
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## variáveis globais para gráficos da análise exploratória de dados
+var.dados    <- varX  ; var.label    <- varX.label
+kernel.abrev <- varX_KS[ 1,'kernel']
+kernel.compl <- varX_KS[ 1,'kernel_nome']
+
+## https://rdrr.io/cran/snpar/src/R/kde.R
+kern <- snpar::kde( var.dados, kernel = kernel.abrev, plot=FALSE)
+kern <- cbind( kern$xgrid, kern$fhat, kern$Fhat)
+kern <- kern[ order( kern[,1]), ]
+
+## exporta gráficos para artigo
+ylim_max <- round( digits = 2
+                 ,max(
+                    max(kern[,2]) # maior valor da densidade da função de kernel
+                   ,max( hist( var.dados, plot=FALSE)$density ) # maior valor da densidade do histograma
+                  )
+                  ) * (1 + 0.15)
+
+## Histograma, boxplot e densidades de kernel para varY
+pdf(file = paste0( './img/', var.label, '_histogram.pdf'), width=5, height=5)
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(8,1))
+par(mar=c(4, 4.1, 1.1, 2.1))
+hist(
+  var.dados
+ ,prob=TRUE
+ ,n=15
+ ,ylim=c(0, ylim_max )
+ ,xlab=''
+ ,main=''
+ ,ylab='densidade'
+)
+lines(
+  kern[,1]
+ ,kern[,2]
+ ,col='blue'
+ ,lwd=2
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y= ylim_max / 2
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = c('blue')
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+par(mar=c(0, 4.1, 1.1, 2.1))
+boxplot(
+  var.dados
+ ,horizontal=TRUE
+ ,xaxt="n"
+ ,frame=F
+)
+graphics.off()
+
+## FDA Empírica e FDA aproximada a partir da densidade de kernel
+pdf(file = paste0( './img/', var.label, '_ecdf.pdf'), width=5, height=5)
+plot(
+  ecdf( var.dados )
+ ,main = ''
+ ,xlab = ''
+ ,ylab = 'distribuição acumulada'
+ ,pch=20
+)
+lines(
+  kern[,1]
+ ,kern[,3]
+ ,type='l'
+ ,col='blue'
+ ,lwd=2
+ ,ylim=c(0,1)
+)
+legend(
+  x=10
+ ,y=0.60
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = 'blue'
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+graphics.off()
+#+END_SRC
+
+*** full_nonpar tabela KS transposta                               :noexport:
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## Tabela 1 do paper transposta (Distância de KS para V_F e V_T
+capture.output(
+  print(
+    xtable(
+      bind_rows( pivot_longer(data = varX_KS[,c(1,3)] %>% rename( '$KS (V_T)$' = max_distance_KS),cols = -kernel_nome)
+               ,pivot_longer(data = varY_KS[,c(1,3)] %>% rename( '$KS (V_F)$' = max_distance_KS),cols = -kernel_nome)
+                ) %>%
+      arrange( name, kernel_nome ) %>%
+      pivot_wider(
+        id_cols = 'name', names_from = 'kernel_nome', values_from = 'value'
+      )
+     ,digits= c(0, 0, rep(casas.decimais, times=8))
+     ,align="c|c|c|c|c|c|c|c|c|c|"  
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0('./dados/',varX.label,"_",varY.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+*** Comparação gráfica das funções de kernel
+
+#+BEGIN_SRC R :exports results :results results graphics file :file ./img/VT_VF_kernel_comparison.pdf :width 8 :height 10 :session full_nonpar
+par(mfrow=c(4,3))
+for(i in 1:10){
+  title <- ifelse(
+    i==1
+   ,'escala original'
+   ,ifelse(
+      i==2
+     ,'pseudo-observações'
+     ,paste(
+        'kernel:'
+       ,switch(
+          names(kdeVarX)[i]
+         ,'triw' = 'Triweight'
+         ,'quar' = 'Quartic'
+         ,'tria' = 'Triangular'
+         ,'tric' = 'Tricube'
+         ,'cos'  = 'Cosine'
+         ,'epan' = 'Epanechnikov'
+         ,'unif' = 'Uniform'
+         ,'gaus' = 'Gaussian'
+        )
+      )
+    )
+  )
+  x_lab <- ifelse( i==1, varX.label, paste0('u (',varX.label,')') )
+  y_lab <- ifelse( i==1, varY.label, paste0('v (',varY.label,')'))
+  plot(
+    x=kdeVarX[,i]
+   ,y=kdeVarY[,i]
+   ,main = title
+   ,pch=19
+   ,xlab=x_lab
+   ,ylab=y_lab
+  )
+}
+#+END_SRC
+
+#+RESULTS:
+[[file:./img/VT_VF_kernel_comparison.pdf]]
+
+
+\pagebreak
+
+
+** Estimação da dependência
+
+*** Marginais em pseudo-observações
+**** Cópula paramétrica (MPLE, pacote 'copula')
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+joe     <- fitCopula(     joeCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+gumbel  <- fitCopula(  gumbelCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+frank   <- fitCopula(   frankCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+normal  <- fitCopula(  normalCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+t       <- fitCopula(       tCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+clayton <- fitCopula( claytonCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+
+##  @loglik   --> log-verossimilhança
+##  @estimate --> theta_hat
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+ajustes <- data.frame(
+  copula     = c("joe","gumbel","frank","normal","clayton","t")
+ ,theta_mple = c(
+      round(joe@estimate,3)
+     ,round(gumbel@estimate,3)
+     ,round(frank@estimate,3)
+     ,round(normal@estimate,3)
+     ,round(clayton@estimate,3)
+     ,paste0( round(t@estimate[1],3), " (df=", round(t@estimate[2],3), ")" )
+  )
+ ,log_pseudolik = round(
+    c(
+      joe@loglik
+     ,gumbel@loglik
+     ,frank@loglik
+     ,normal@loglik
+     ,clayton@loglik
+     ,t@loglik[1])
+   ,3
+  )
+ ,BIC = round(
+    c(
+      joe@loglik - 0.5*length(joe@copula@parameters)*log(length(varX))
+     ,gumbel@loglik - 0.5*length(gumbel@copula@parameters)*log(length(varX))
+     ,frank@loglik - 0.5*length(frank@copula@parameters)*log(length(varX))
+     ,normal@loglik - 0.5*length(normal@copula@parameters)*log(length(varX))
+     ,clayton@loglik - 0.5*length(clayton@copula@parameters)*log(length(varX))
+     ,t@loglik - 0.5*length(t@copula@parameters)*log(length(varX))
+    )
+   ,3
+  )
+)
+semipar_pobs_bestfit <- normal
+(bondade_ajuste <- ajustes[ order( - ajustes$BIC ),] )
+#+END_SRC
+
+#+CAPTION: Bondade do ajuste (por ordem decrescente do BIC)
+#+RESULTS:
+| copula  |       theta_mple | log_pseudolik |    BIC |
+|---------+------------------+---------------+--------|
+| normal  |            0.875 |         19.32 | 17.619 |
+| gumbel  |             2.95 |        19.185 | 17.484 |
+| t       | 0.868 (df=3.529) |        20.022 | 16.621 |
+| frank   |            9.385 |        16.968 | 15.268 |
+| joe     |            3.641 |        16.826 | 15.125 |
+| clayton |            2.929 |        16.515 | 14.814 |
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+destino <- './dados/comparativo_geral_BIC.tex'
+
+cat(
+  paste0(
+    "% Aplicação: Quebra de Barragens \n"
+   ,"% fonte:     0_Dissertacao/Aplicacoes/Barragens/artigo/full_nonpar/full_nonpar.org \n"
+   ,"\n"
+   ,"% Modelo: ",varY.label," em função de ",varX.label," \n"
+   ,"%   Coeficientes de dependência \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"RhoPearson}{" , signif(cor(varX,varY, method='pearson' ) ,5 ),"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"RhoSpearman}{", signif(cor(varX,varY, method='spearman') ,5 ),"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"TauKendall}{" , signif(cor(varX,varY, method='kendall' ) ,5 ),"} \n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = FALSE
+)
+
+cat(
+  paste0(
+    "%   Marginais padronizadas pelas pseudo-observações \n"
+   ,"\n"
+   ,"%     Estimação Semi-Paramétrica da cópula \n"
+   ,"%       Máxima Pseudo-Verossimilhança - via função copula::copula \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsFamilia}{" , bondade_ajuste[ 1, 'copula' ],"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsTheta}{" , bondade_ajuste[ 1, 'theta_mple' ],"} \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsBIC}{"  , round(  semipar_pobs_bestfit@loglik - 0.5*length(semipar_pobs_bestfit@copula@parameters) *log(length(varX)), casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+#+END_SRC
+
+**** Cópula Não-paramétrica (Kernel, pacote 'kdecopula')
+	 
+#+BEGIN_SRC R :exports both :results output :session full_nonpar
+## marginais em pseudo-observações
+uv        <- data.frame( varX.pobs, varY.pobs)
+names(uv) <- c( varX.label, varY.label )
+
+## ajuste não-paramétrico por 3 métodos: T, TLL1 e TLL2
+bic.method.T    <- round(
+  BIC( fit.kdecop.T    <- kdecopula::kdecop( uv, method = 'T'    ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL1 <- round(
+  BIC( fit.kdecop.TLL1 <- kdecopula::kdecop( uv, method = 'TLL1' ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL2 <- round(
+  BIC( fit.kdecop.TLL2 <- kdecopula::kdecop( uv, method = 'TLL2' ) ) / (-2)
+ ,digits=casas.decimais
+)
+
+nonpar_pobs_bestfit <- fit.kdecop.T
+summary(nonpar_pobs_bestfit)
+
+## plot(uv, pch=19)
+## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
+## subset( ajustes, copula == 'normal')
+## plot(fit)
+#+END_SRC
+
+#+RESULTS:
+: Kernel copula density estimate (tau = 0.62)
+: ------------------------------
+: Variables:    VT -- VF 
+: Observations: 30 
+: Method:       Transformation estimator ('T') 
+: Bandwidth:    matrix(c(0.52, 0.44, 0, 0.28), 2, 2)
+: ---
+: logLik: 23.26    AIC: -44.12    cAIC: -43.93    BIC: -42.44 
+: Effective number of parameters: 1.2
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+cat(
+  paste0(
+    "%     Estimação Não-Paramétrica - via função kdecopula::kdecop \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodT}{"  , round( bic.method.T, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodTLLum}{"  , round( bic.method.TLL1, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodTLLdois}{"  , round( bic.method.TLL2, casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+## gráficos de superfície
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'T','.pdf'), width=5, height=5)
+plot( fit.kdecop.T, xlab = 'u', ylab = 'v' )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'TLL1','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL1, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'TLL2','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL2, xlab = 'u', ylab = 'v'  )
+graphics.off()
+#+END_SRC
+
+\pagebreak
+
+
+*** Marginais em funções de kernel
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+varX.kern <- kdeVarX[ , varX_KS[ 1, 'kernel' ] ]
+varY.kern <- kdeVarY[ , varY_KS[ 1, 'kernel' ] ]
+#+END_SRC
+
+**** Cópula paramétrica (MPLE, pacote 'copula')
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+joe     <- fitCopula(     joeCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+gumbel  <- fitCopula(  gumbelCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+frank   <- fitCopula(   frankCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+normal  <- fitCopula(  normalCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+t       <- fitCopula(       tCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+clayton <- fitCopula( claytonCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+
+##  @loglik   --> log-verossimilhança
+##  @estimate --> theta_hat
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+ajustes <- data.frame(
+  copula     = c("joe","gumbel","frank","normal","clayton","t")
+ ,theta_mple = c(
+      round(joe@estimate,3)
+     ,round(gumbel@estimate,3)
+     ,round(frank@estimate,3)
+     ,round(normal@estimate,3)
+     ,round(clayton@estimate,3)
+     ,paste0( round(t@estimate[1],3), " (df=", round(t@estimate[2],3), ")" )
+  )
+ ,log_pseudolik = round(
+    c(
+      joe@loglik
+     ,gumbel@loglik
+     ,frank@loglik
+     ,normal@loglik
+     ,clayton@loglik
+     ,t@loglik[1])
+   ,3
+  )
+ ,BIC = round(
+    c(
+      joe@loglik - 0.5*length(joe@copula@parameters)*log(length(varX))
+     ,gumbel@loglik - 0.5*length(gumbel@copula@parameters)*log(length(varX))
+     ,frank@loglik - 0.5*length(frank@copula@parameters)*log(length(varX))
+     ,normal@loglik - 0.5*length(normal@copula@parameters)*log(length(varX))
+     ,clayton@loglik - 0.5*length(clayton@copula@parameters)*log(length(varX))
+     ,t@loglik - 0.5*length(t@copula@parameters)*log(length(varX))
+    )
+   ,3
+  )
+)
+semipar_kern_bestfit <- clayton
+(bondade_ajuste <- ajustes[ order( - ajustes$BIC ),] )
+#+END_SRC
+
+#+CAPTION: Bondade do ajuste (por ordem decrescente do BIC)
+#+RESULTS:
+| copula  |        theta_mple | log_pseudolik |    BIC |
+|---------+-------------------+---------------+--------|
+| clayton |             6.339 |        27.783 | 26.083 |
+| normal  |             0.928 |        24.475 | 22.774 |
+| frank   |            14.716 |        24.204 | 22.504 |
+| t       | 0.929 (df=13.533) |        24.639 | 21.238 |
+| gumbel  |             3.339 |        20.235 | 18.534 |
+| joe     |             3.359 |        15.214 | 13.514 |
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+
+cat(
+  paste0(
+    "%   Marginais padronizadas pelas densidades de Kernel \n"
+   ,"\n"
+   ,"%     Kernel mais adequado (segundo Distância de Kolmogorov-Smirnoff) por variável \n"
+   ,"\\newcommand{\\",varY.label,"KernelNome}{", varY_KS[ 1, 'kernel'] ,"} \n"
+   ,"\\newcommand{\\",varY.label,"KernelKS}{"  , round( varY_KS[ 1, 'max_distance_KS'], casas.decimais) ,"} \n"
+   ,"\\newcommand{\\",varX.label,"KernelNome}{", varX_KS[ 1, 'kernel'] ,"} \n"
+   ,"\\newcommand{\\",varX.label,"KernelKS}{"  , round( varX_KS[ 1, 'max_distance_KS'], casas.decimais) ,"} \n"
+   ,"\n"
+   ,"%     Estimação Semi-Paramétrica da cópula \n"
+   ,"%       Máxima Pseudo-Verossimilhança - via função copula::copula \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernFamilia}{" , bondade_ajuste[ 1, 'copula' ],"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernTheta}{" , bondade_ajuste[ 1, 'theta_mple' ],"} \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernBIC}{"  , round(  semipar_kern_bestfit@loglik - 0.5*length(semipar_kern_bestfit@copula@parameters) *log(length(varX)), casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+#+END_SRC
+
+**** Cópula Não-paramétrica (Kernel, pacote 'kdecopula')
+
+#+BEGIN_SRC R :exports both :results output :session full_nonpar
+## marginais em kernel
+uv        <- data.frame( varX.kern, varY.kern )
+names(uv) <- c( varX.label, varY.label )
+
+## ajuste não-paramétrico por 3 métodos: T, TLL1 e TLL2
+bic.method.T    <- round(
+  BIC( fit.kdecop.T    <- kdecopula::kdecop( uv, method = 'T'    ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL1 <- round(
+  BIC( fit.kdecop.TLL1 <- kdecopula::kdecop( uv, method = 'TLL1' ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL2 <- round(
+  BIC( fit.kdecop.TLL2 <- kdecopula::kdecop( uv, method = 'TLL2' ) ) / (-2)
+ ,digits=casas.decimais
+)
+
+nonpar_kern_bestfit <- fit.kdecop.T
+summary(nonpar_kern_bestfit)
+
+## plot(uv, pch=19)
+## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
+## subset( ajustes, copula == 'normal')
+## plot(fit)
+#+END_SRC
+
+#+RESULTS:
+: Kernel copula density estimate (tau = 0.72)
+: ------------------------------
+: Variables:    VT -- VF 
+: Observations: 30 
+: Method:       Transformation estimator ('T') 
+: Bandwidth:    matrix(c(0.47, 0.4, 0, 0.21), 2, 2)
+: ---
+: logLik: 31.21    AIC: -60.62    cAIC: -60.5    BIC: -59.36 
+: Effective number of parameters: 0.9
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+cat(
+  paste0(
+    "%     Estimação Não-Paramétrica - via função kdecopula::kdecop \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodT}{"     , round( bic.method.T   , casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodTLLum}{"  , round( bic.method.TLL1, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodTLLdois}{"  , round( bic.method.TLL2, casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+## gráficos de superfície
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'T','.pdf'), width=5, height=5)
+plot( fit.kdecop.T, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'TLL1','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL1, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'TLL2','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL2, xlab = 'u', ylab = 'v'  )
+graphics.off()
+#+END_SRC
+
+
+** $E( V | U \in (a,b] )$
+
+   $$E( V | U \in (a,b] ) = 1 - \frac{1}{b-a}\left[ \int_0^1 C(b,x)\,dx - \int_0^1 C(a,x)\,dx\right]$$
+
+
+Esperança condicional $E( V | U \in (a,b] )$, utilizando a cópula paramétrica (estimação do parâmetro de associação via máxima pseudo-verossimilhança) calculada com base nas marginais reescaladas pelas pseudo-observações (ref. aos postos das observações originais).
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Cálculo da Esperança condicional E( V | U \in (a,b] )
+##
+## Estimação semi-paramétrica
+##   marginais corrigidas pelas pseudo-observações
+##   e cópula paramétrica estimada via MPLE
+##
+expect_V_given_UinInterval_semipar <- function( a, b, theta, family ) {
+    ## Expression for E( V | U \in (a,b], \theta )
+    if ( a<0 || a>1 ) stop('a in (a,b] outside domain [0,1]. ')
+    if ( b<0 || b>1 ) stop('b in (a,b] outside domain [0,1]. ')
+    if ( a>b )        stop('a greater then b in (a,b]        ')
+    ## no control for correctness on the copula association parameter...
+    ## --
+    ## cast arguments to numeric
+    a     <- as.numeric(a)
+    b     <- as.numeric(b)
+    theta <- as.numeric(theta)
+    ## first integral: \int_0^1 C(b,x) dx
+    first_integral <- integrate(
+        Vectorize(
+            function(x) { pCopula( c(b,x), family( param=theta, dim=2) ) }
+        )
+       ,lower=0
+       ,upper=1
+    )
+    ## second integral: \int_0^1 C(a,x) dx
+    second_integral <- integrate(
+        Vectorize(
+            function(x) { pCopula( c(a,x), family( param=theta, dim=2) ) }
+        )
+       ,lower=0
+       ,upper=1
+    )
+    result <- 1 - ( first_integral$value - second_integral$value ) / ( b - a )
+    return( round( result, digits = casas.decimais ) )
+}
+## check: expect_V_given_UinInterval_semipar( a=0.0, b=0.25, theta=3, family = gumbelCopula )
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+cond_expct_semipar <- data.frame(
+  a = c( 0   , 0.25, 0.50, 0.75 )
+ ,b = c( 0.25, 0.50, 0.75, 1.00 )
+ ,VT_a = 0
+ ,VT_b = 0
+ ,estimation = 'semipar_pobs'
+ ,expect_V_given_U = 0
+ ,expect_VF_given_VT = 0
+)
+
+## subset para retornar à escala original
+tmp1 <- data.frame(
+  kdeVarX[ , varX.label ] # VT na escala original
+ ,kdeVarY[ , varY.label ] # VF na escala original
+ ,kdeVarX[ , 'pobs'     ] # VT reescalado para [0,1] usando pseudo-observações
+)
+names(tmp1) <- c( varX.label, varY.label, 'U_orig_pobs')
+
+for (i in 1:nrow(cond_expct_semipar)) {
+  ## escala [0,1] - Pseudo-observações
+  cond_expct_semipar[i,'expect_V_given_U'] = expect_V_given_UinInterval_semipar(
+    a= cond_expct_semipar[i,'a']
+   ,b= cond_expct_semipar[i,'b']
+   ,theta= semipar_pobs_bestfit@estimate
+   ,family = normalCopula
+  )
+  ## escala original
+  ##  VT_a e VT_b
+  cond_expct_semipar[i,'VT_a'] <- tmp1$VT[ which.min( abs( cond_expct_semipar[i,'a'] - tmp1[, 'U_orig_pobs']) ) ]
+  cond_expct_semipar[i,'VT_b'] <- tmp1$VT[ which.min( abs( cond_expct_semipar[i,'b'] - tmp1[, 'U_orig_pobs']) ) ]
+  ##  VF  
+  tmp1.subset   <- subset( tmp1, (U_orig_pobs >= cond_expct_semipar[i,'a']) & (U_orig_pobs <= cond_expct_semipar[i,'b']) )
+  tmp1.subset$V <- pobs( tmp1.subset$VF )
+  cond_expct_semipar[i,'expect_VF_given_VT'] <- tmp1.subset$VF[ which.min( abs( tmp1.subset$V - cond_expct_semipar[i,'expect_V_given_U'] ) ) ]
+} 
+cond_expct_semipar
+#+END_SRC
+
+#+RESULTS:
+|    a |    b |  VT_a | VT_b | estimation |  expect_V_given_U | expect_VF_given_VT |
+|------+------+-------+------+------------+-------------------+--------------------|
+|    0 | 0.25 | 0.038 |  0.3 | semipar    | 0.175059975812842 |              0.021 |
+| 0.25 |  0.5 |   0.3 | 1.52 | semipar    | 0.400236808187105 |              0.085 |
+|  0.5 | 0.75 |  1.52 | 7.04 | semipar    | 0.599763191812895 |                0.6 |
+| 0.75 |    1 |  7.04 |   74 | semipar    | 0.824940024187157 |                 32 |
+
+Esperança condicional $E( V | U \in (a,b] )$, utilizando a cópula não-paramétrica (estimação do parâmetro de associação via funções de kernel) calculada com base nas marginais reescaladas pelas funções de distribuição acumuladas provenientes da estimação das funções densidade de probabilidade obtidas via funções de kernel.
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Estimação não-paramétrica completa
+##   marginais corrigidas pelas FDA baseadas na fdp de kernel
+##   e cópula não-paramétrica estimada via pacote kdecopula
+##
+expect_V_given_UinInterval_nonpar <- function( a, b, nonpar_copula ) {
+    ## Expression for E( V | U \in (a,b], \theta )
+    if ( a<0 || a>1 ) stop('a in (a,b] outside domain [0,1]. ')
+    if ( b<0 || b>1 ) stop('b in (a,b] outside domain [0,1]. ')
+    if ( a>b )        stop('a greater then b in (a,b]        ')
+    ## no control for correctness on the copula association parameter...
+    ## --
+    ## cast arguments to numeric
+    a     <- as.numeric(a)
+    b     <- as.numeric(b)
+    ## first integral: \int_0^1 C(b,x) dx
+    first_integral <- integrate(
+        Vectorize(
+            function(x) { pkdecop( c(b,x), nonpar_copula ) }
+        )
+       ,lower=0
+       ,upper=1
+    )
+    ## second integral: \int_0^1 C(a,x) dx
+    second_integral <- integrate(
+        Vectorize(
+            function(x) { pkdecop( c(a,x), nonpar_copula ) }
+        )
+       ,lower=0
+       ,upper=1
+    )
+    result <- 1 - ( first_integral$value - second_integral$value ) / ( b - a )
+    return( round( result, digits = casas.decimais ) )
+}
+## check: expect_V_given_UinInterval_nonpar(a= 0, b= 0.25, nonpar_copula = fit.kdecop.T)
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+cond_expct_nonpar <- data.frame(
+  a = c( 0   , 0.25, 0.50, 0.75 )
+ ,b = c( 0.25, 0.50, 0.75, 1.00 )
+ ,VT_a = 0
+ ,VT_b = 0
+ ,estimation = 'nonpar_kern'
+ ,expect_V_given_U = 0
+ ,expect_VF_given_VT = 0
+)
+
+## subset para retornar à escala original
+tmp1 <- data.frame(
+  kdeVarX[ , varX.label   ] # VT na escala original
+ ,kdeVarY[ , varY.label   ] # VF na escala original
+ ,kdeVarX[ , kernel.abrev ] # VT reescalada em [0,1] pela FDA com base na fdp de kernel
+)
+names(tmp1) <- c( varX.label, varY.label, 'U_orig_kern')
+
+for (i in 1:nrow(cond_expct_nonpar)) {
+  ## escala [0,1] - fdp estimdada via kernel
+  cond_expct_nonpar[i,'expect_V_given_U'] = expect_V_given_UinInterval_nonpar(
+    a = cond_expct_nonpar[i,'a']
+   ,b = cond_expct_nonpar[i,'b']
+   ,nonpar_copula = nonpar_kern_bestfit
+  )
+  ## escala original
+  ##  VT_a e VT_b
+  cond_expct_nonpar[i,'VT_a'] <- tmp1$VT[ which.min( abs( cond_expct_nonpar[i,'a'] - tmp1[, 'U_orig_kern']) ) ]
+  cond_expct_nonpar[i,'VT_b'] <- tmp1$VT[ which.min( abs( cond_expct_nonpar[i,'b'] - tmp1[, 'U_orig_kern']) ) ]
+  ##  VF  
+  tmp1.subset   <- subset( tmp1, (U_orig_kern >= cond_expct_nonpar[i,'a']) & (U_orig_kern <= cond_expct_nonpar[i,'b']) )
+  tmp1.subset$V <- snpar.kde.mod( x = tmp1.subset$VF, kernel=kernel.abrev, plot=FALSE)$Fhat
+  cond_expct_nonpar[i,'expect_VF_given_VT'] <- tmp1.subset$VF[ which.min( abs( tmp1.subset$V - cond_expct_nonpar[i,'expect_V_given_U'] ) ) ]
+} 
+cond_expct_nonpar
+#+END_SRC
+
+#+RESULTS:
+|    a |    b |  VT_a | VT_b | estimation  |  expect_V_given_U | expect_VF_given_VT |
+|------+------+-------+------+-------------+-------------------+--------------------|
+|    0 | 0.25 | 0.038 | 0.12 | full_nonpar | 0.121605502320363 |              0.011 |
+| 0.25 |  0.5 |  0.12 |    2 | full_nonpar | 0.441741778847694 |               0.17 |
+|  0.5 | 0.75 |     2 | 7.04 | full_nonpar | 0.626021635637283 |                  2 |
+| 0.75 |    1 |  7.04 |   74 | full_nonpar | 0.817983921647876 |               23.6 |
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+
+
+## Compara expect_V_given_U (marginais padronizadas)
+compara_cond_expct <- bind_rows(
+  cond_expct_semipar %>%
+  mutate(
+    interval = paste0('(',a,';',b,']')
+   ,cond_expct = 'E_1 (semipar_pobs)'
+  ) %>%
+  select( interval, cond_expct, expect_V_given_U)
+ ,
+  cond_expct_nonpar %>%
+  mutate(
+    interval = paste0('(',a,';',b,']')
+   ,cond_expct = 'E_2 (nonpar_kernel)'
+  ) %>%
+  select( interval, cond_expct, expect_V_given_U)
+)
+
+## Opção 1 - formato largo
+compara_cond_expct %>%
+  pivot_wider(
+    id_cols = cond_expct
+    ,names_from = interval
+   ,values_from = expect_V_given_U
+  ) %>%
+  xtable( digits= casas.decimais ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = FALSE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_expect_compara_formato_largo.tex'
+  )
+
+
+## Opção 2 - formato longo
+compara_cond_expct %>%
+  pivot_wider(
+    id_cols = interval
+    ,names_from = cond_expct
+   ,values_from = expect_V_given_U
+  ) %>%
+  xtable( digits= casas.decimais ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = FALSE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_expect_compara_formato_longo.tex'
+  )
+
+## escala original, resultados da estimação não-paramétrica completa
+##  formato longo
+cond_expct_nonpar %>%
+  mutate(
+    interval = paste0('(',VT_a,';',VT_b,']')
+  ) %>%
+  select( interval, expect_VF_given_VT) %>%
+  rename( expectVFgivenVT = expect_VF_given_VT ) %>%
+  xtable( digits= casas.decimais ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = FALSE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_expect_fullnonpar_escala_original_formato_longo.tex'
+  )
+
+##  formato largo
+cond_expct_nonpar %>%
+  mutate(
+    interval = paste0('(',VT_a,';',VT_b,']')
+  ) %>%
+  select( interval, expect_VF_given_VT) %>%
+  rename( expectVFgivenVT = expect_VF_given_VT ) %>%
+  t() %>%
+  xtable( digits= casas.decimais ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = TRUE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_expect_fullnonpar_escala_original_formato_largo.tex'
+  )
+#+END_SRC
+
+\pagebreak
+
+
+* $D_{\textrm{max}}$ em função de $R_f$ 
+  
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+dt.sub <- na.omit(
+  dt[, c("Dmax","Rf","No") ]
+)
+dt.sub <- merge(
+    dt.sub
+   ,names
+   ,by="No"
+)
+label      <- dt.sub$Mine
+
+varX       <- dt.sub$Rf
+varX.pobs  <- rank( varX ) / ( length( varX ) + 1 )
+varX.label <- "Rf"
+
+varY       <- dt.sub$Dmax
+varY.pobs  <- rank( varY ) / ( length( varY ) + 1 )
+varY.label <- "Dmax"
+#+END_SRC
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Gráfico de dispersão
+suppressMessages(
+  ggsave(
+    filename = paste0('./img/',varX.label,'_',varY.label,'_scatter_labels.pdf')
+   ,plot = ggplot(
+      data.frame(
+        varX
+       ,varY
+       ,label=ifelse(varY>8,label,"")
+      )
+     ,aes(
+        varX
+       ,varY
+       ,label=label
+      )
+    ) +
+      labs(x=varX.label, y=varY.label)+
+      geom_point(shape=19, color="black", size=2) +
+      theme_bw() +
+      theme( text = element_text(size=12),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_text(hjust = 0.5)
+            )+
+      geom_text_repel()
+   ,device="pdf"
+   ,width=5
+   ,height=5
+  )
+)
+#+END_SRC
+
+\pagebreak
+
+** Estimação das marginais
+
+A estimação das marginais src_R[:results raw values :session full_nonpar]{varY.label} e src_R[:results raw values :session full_nonpar]{varX.label} se dará não-parametricamente de duas formas: (1) via pseudo-observações e (2) via densidades de kernel. 
+
+Com base no pacote =snpar= do software =GNU R= estimou-se a função densidade de probabilidade com base em diferentes funções de kernel e, finalmente, obteve-se uma estimativa para a função distribuição acumulada, calculada a partir da função densidade de kernel.
+
+*** src_R[:results raw values :session full_nonpar]{varY.label}
+
+Na tabela abaixo é apresentada uma comparação entre as pseudo-observações e as funções de distribuição acumulada para os diferentes kernels.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+kdeVarY <- data.frame(
+  varY
+ ,pobs = rank( varY ) / ( length( varY ) + 1 )
+ ,epan = snpar::kde( x = varY, kernel='epan', plot=FALSE)$Fhat
+ ,unif = snpar::kde( x = varY, kernel='unif', plot=FALSE)$Fhat
+ ,tria = snpar::kde( x = varY, kernel='tria', plot=FALSE)$Fhat
+ ,quar = snpar::kde( x = varY, kernel='quar', plot=FALSE)$Fhat
+ ,triw = snpar::kde( x = varY, kernel='triw', plot=FALSE)$Fhat
+ ,tric = snpar::kde( x = varY, kernel='tric', plot=FALSE)$Fhat
+ ,gaus = snpar::kde( x = varY, kernel='gaus', plot=FALSE)$Fhat
+ ,cos  = snpar::kde( x = varY, kernel='cos' , plot=FALSE)$Fhat
+)
+colnames(kdeVarY)[1] <- varY.label
+
+kdeVarY[ order(kdeVarY[,1]) , ] %>% round(., casas.decimais)
+#+END_SRC
+
+#+RESULTS:
+| Dmax |  pobs |  epan |  unif |  tria |  quar |  triw |  tric |  gaus |   cos |
+|------+-------+-------+-------+-------+-------+-------+-------+-------+-------|
+| 0.03 | 0.032 | 0.144 | 0.167 | 0.136 | 0.134 | 0.127 | 0.135 | 0.213 | 0.142 |
+|  0.1 | 0.065 | 0.147 |  0.17 |  0.14 | 0.137 | 0.131 | 0.138 | 0.216 | 0.146 |
+| 0.15 | 0.097 |  0.15 | 0.172 | 0.143 |  0.14 | 0.134 | 0.141 | 0.218 | 0.148 |
+|  0.3 | 0.145 | 0.157 | 0.178 | 0.151 | 0.148 | 0.143 | 0.148 | 0.223 | 0.155 |
+|  0.3 | 0.145 | 0.157 | 0.178 | 0.151 | 0.148 | 0.143 | 0.148 | 0.223 | 0.155 |
+|  0.8 |  0.21 | 0.183 |   0.2 |  0.18 | 0.176 | 0.173 | 0.175 | 0.242 | 0.181 |
+|  0.8 |  0.21 | 0.183 |   0.2 |  0.18 | 0.176 | 0.173 | 0.175 | 0.242 | 0.181 |
+|  1.3 | 0.258 | 0.209 | 0.222 | 0.209 | 0.205 | 0.204 | 0.203 | 0.261 | 0.209 |
+|  1.5 |  0.29 |  0.22 | 0.231 | 0.221 | 0.218 | 0.217 | 0.215 | 0.269 |  0.22 |
+|  2.5 | 0.323 | 0.279 | 0.285 | 0.282 | 0.281 | 0.283 | 0.279 | 0.309 | 0.279 |
+|    4 | 0.355 | 0.375 | 0.369 | 0.375 | 0.378 | 0.379 | 0.379 | 0.371 | 0.376 |
+|    5 | 0.419 | 0.438 | 0.425 | 0.438 | 0.441 |  0.44 | 0.442 | 0.413 | 0.438 |
+|    5 | 0.419 | 0.438 | 0.425 | 0.438 | 0.441 |  0.44 | 0.442 | 0.413 | 0.438 |
+|    5 | 0.419 | 0.438 | 0.425 | 0.438 | 0.441 |  0.44 | 0.442 | 0.413 | 0.438 |
+|  5.2 | 0.484 |  0.45 | 0.436 |  0.45 | 0.453 | 0.452 | 0.454 | 0.421 | 0.451 |
+|    6 | 0.516 | 0.495 | 0.482 | 0.497 | 0.498 | 0.499 | 0.499 | 0.453 | 0.496 |
+|    7 | 0.548 | 0.546 | 0.536 | 0.549 | 0.551 | 0.555 |  0.55 | 0.493 | 0.547 |
+|    8 | 0.629 | 0.591 | 0.577 | 0.597 |   0.6 | 0.606 | 0.599 | 0.531 | 0.593 |
+|    8 | 0.629 | 0.591 | 0.577 | 0.597 |   0.6 | 0.606 | 0.599 | 0.531 | 0.593 |
+|    8 | 0.629 | 0.591 | 0.577 | 0.597 |   0.6 | 0.606 | 0.599 | 0.531 | 0.593 |
+|    8 | 0.629 | 0.591 | 0.577 | 0.597 |   0.6 | 0.606 | 0.599 | 0.531 | 0.593 |
+|   12 | 0.726 | 0.721 | 0.705 | 0.724 | 0.727 |  0.73 | 0.728 | 0.653 | 0.722 |
+|   12 | 0.726 | 0.721 | 0.705 | 0.724 | 0.727 |  0.73 | 0.728 | 0.653 | 0.722 |
+|   25 | 0.774 | 0.783 | 0.783 | 0.783 | 0.783 | 0.783 | 0.783 | 0.782 | 0.783 |
+|   41 | 0.806 |  0.82 | 0.823 | 0.819 | 0.818 | 0.817 | 0.818 | 0.825 | 0.819 |
+|   45 | 0.839 | 0.847 | 0.844 | 0.848 | 0.849 | 0.849 | 0.849 | 0.841 | 0.847 |
+|   80 | 0.871 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 |
+|  110 | 0.903 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.918 | 0.917 |
+|  120 | 0.935 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 | 0.948 |  0.95 |
+|  637 | 0.968 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 |
+
+Abaixo apresenta-se a distância de Kolmogorov-Smirnoff entre a FDA empírica e a FDA calculada com base nas diferentes funções de kernel, ou seja, $\max | \hat{F}(x) - F_k^*(x) |$, sendo $\hat{F}(x)$ a função distribuição acumulada empírica e $F_k^*(x)$ a função distribuição acumulada obtida a partir da função densidade do kernel $k$, com $k=$ epanechnikov, uniform, quartic, triagular, triweight, gaussian, cosine e tricube. 
+
+#+BEGIN_SRC R :exports results :results values :colnames yes :session full_nonpar
+(varY_KS <- kdeVarY %>%
+   pivot_longer(
+     -c(varY.label,'pobs')
+    ,names_to = 'kernel'
+    ,values_to = 'step'
+   ) %>%
+   mutate(
+     kernel_nome = case_when(
+       kernel == 'triw' ~ 'Triweight'
+      ,kernel == 'quar' ~ 'Quartic'
+      ,kernel == 'tria' ~ 'Triangular'
+      ,kernel == 'tric' ~ 'Tricube'
+      ,kernel == 'cos'  ~ 'Cosine'
+      ,kernel == 'epan' ~ 'Epanechnikov'
+      ,kernel == 'unif' ~ 'Uniform'
+      ,kernel == 'gaus' ~ 'Gaussian'
+      ,TRUE ~ as.character(kernel)
+     )
+    ,KS = round( abs( step - pobs), casas.decimais)
+   ) %>%
+   group_by( kernel_nome, kernel ) %>%
+   summarise(
+     max_distance_KS = max(KS)
+   ) %>%
+   arrange( max_distance_KS ) %>%
+   as.data.frame
+)
+#+END_SRC
+
+#+RESULTS:
+| kernel_nome  | kernel | max_distance_KS |
+|--------------+--------+-----------------|
+| Triweight    | triw   |           0.095 |
+| Quartic      | quar   |           0.101 |
+| Tricube      | tric   |           0.103 |
+| Triangular   | tria   |           0.104 |
+| Cosine       | cos    |            0.11 |
+| Epanechnikov | epan   |           0.112 |
+| Uniform      | unif   |           0.134 |
+| Gaussian     | gaus   |           0.181 |
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      kdeVarY[ order(kdeVarY[,1]) , ]
+     ,digits= c(0, rep( casas.decimais, ncol(kdeVarY) ))
+     ,align="rc|c|c|c|c|c|c|c|c|c|"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/", varY.label,"_CDFKernels_table.tex")
+)
+
+## Exporta tabela de comparação das estatísticas de Kolmogorov-Smirnoff por kernel
+capture.output(
+  print(
+    xtable(
+      varY_KS[,c('kernel_nome','max_distance_KS')]
+     ,digits= c(0, 0, casas.decimais)
+     ,align="c|c|c"
+    )
+   ,include.colnames=FALSE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/",varY.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+Como se pode notar, a função de kernel src_R[:results raw values :session full_nonpar]{varY_KS[1,'kernel_nome']} responde pela menor distância em relação à função distribuição acumulada empírica. 
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## variáveis globais para gráficos da análise exploratória de dados
+var.dados    <- varY  ; var.label    <- varY.label
+kernel.abrev <- varY_KS[ 1,'kernel']
+kernel.compl <- varY_KS[ 1,'kernel_nome']
+
+## https://rdrr.io/cran/snpar/src/R/kde.R
+kern <- snpar::kde( var.dados, kernel = kernel.abrev, plot=FALSE)
+kern <- cbind( kern$xgrid, kern$fhat, kern$Fhat)
+kern <- kern[ order( kern[,1]), ]
+
+## exporta gráficos para artigo
+ylim_max <- round( digits = 2
+                 ,max(
+                    max(kern[,2]) # maior valor da densidade da função de kernel
+                   ,max( hist( var.dados, plot=FALSE)$density ) # maior valor da densidade do histograma
+                  )
+                  ) * (1 + 0.15)
+
+## Histograma, boxplot e densidades de kernel para varY
+pdf(file = paste0( './img/', var.label, '_histogram.pdf'), width=5, height=5)
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(8,1))
+par(mar=c(4, 4.1, 1.1, 2.1))
+hist(
+  var.dados
+ ,prob=TRUE
+ ,n=50
+ ,ylim=c(0, ylim_max )
+ ,xlab=''
+ ,main=''
+ ,ylab='densidade'
+)
+lines(
+  kern[,1]
+ ,kern[,2]
+ ,col='blue'
+ ,lwd=2
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y= ylim_max / 2
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = c('blue')
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+par(mar=c(0, 4.1, 1.1, 2.1))
+boxplot(
+  var.dados
+ ,horizontal=TRUE
+ ,xaxt="n"
+ ,frame=F
+)
+graphics.off()
+
+## FDA Empírica e FDA aproximada a partir da densidade de kernel
+pdf(file = paste0( './img/', var.label, '_ecdf.pdf'), width=5, height=5)
+plot(
+  ecdf( var.dados )
+ ,main = ''
+ ,xlab = ''
+ ,ylab = 'distribuição acumulada'
+ ,pch=20
+)
+lines(
+  kern[,1]
+ ,kern[,3]
+ ,type='l'
+ ,col='blue'
+ ,lwd=2
+ ,ylim=c(0,1)
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y=0.60
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = 'blue'
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+graphics.off()
+#+END_SRC
+
+*** src_R[:results raw values :session full_nonpar]{varX.label}
+
+Na tabela abaixo é apresentada uma comparação entre as pseudo-observações e as funções de distribuição acumulada para os diferentes kernels.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+kdeVarX <- data.frame(
+  varX
+ ,pobs = rank( varX ) / ( length( varX ) + 1 )
+ ,epan = snpar::kde( x = varX, kernel='epan', plot=FALSE)$Fhat
+ ,unif = snpar::kde( x = varX, kernel='unif', plot=FALSE)$Fhat
+ ,tria = snpar::kde( x = varX, kernel='tria', plot=FALSE)$Fhat
+ ,quar = snpar::kde( x = varX, kernel='quar', plot=FALSE)$Fhat
+ ,triw = snpar::kde( x = varX, kernel='triw', plot=FALSE)$Fhat
+ ,tric = snpar::kde( x = varX, kernel='tric', plot=FALSE)$Fhat
+ ,gaus = snpar::kde( x = varX, kernel='gaus', plot=FALSE)$Fhat
+ ,cos  = snpar::kde( x = varX, kernel='cos' , plot=FALSE)$Fhat
+)
+colnames(kdeVarX)[1] <- varX.label
+
+kdeVarX[ order(kdeVarX[,1]) , ] %>% round(., casas.decimais)
+#+END_SRC
+
+#+RESULTS:
+|      Rf |  pobs |  epan |  unif |  tria |  quar |  triw |  tric |  gaus |   cos |
+|---------+-------+-------+-------+-------+-------+-------+-------+-------+-------|
+|    0.01 | 0.048 | 0.234 | 0.259 | 0.224 |  0.22 | 0.211 | 0.222 | 0.285 | 0.231 |
+|    0.01 | 0.048 | 0.234 | 0.259 | 0.224 |  0.22 | 0.211 | 0.222 | 0.285 | 0.231 |
+|    0.02 | 0.097 | 0.234 |  0.26 | 0.225 | 0.221 | 0.212 | 0.222 | 0.286 | 0.232 |
+|    0.03 | 0.129 | 0.235 |  0.26 | 0.225 | 0.221 | 0.212 | 0.223 | 0.286 | 0.232 |
+|    0.09 | 0.161 | 0.239 | 0.263 |  0.23 | 0.226 | 0.217 | 0.227 | 0.288 | 0.236 |
+|    0.15 | 0.194 | 0.242 | 0.266 | 0.234 |  0.23 | 0.222 | 0.231 |  0.29 |  0.24 |
+|    0.18 | 0.226 | 0.244 | 0.268 | 0.236 | 0.232 | 0.224 | 0.233 | 0.292 | 0.242 |
+|    0.22 | 0.258 | 0.247 |  0.27 | 0.239 | 0.235 | 0.227 | 0.236 | 0.293 | 0.245 |
+|    0.29 |  0.29 | 0.251 | 0.273 | 0.244 |  0.24 | 0.233 | 0.241 | 0.296 | 0.249 |
+|    0.32 | 0.323 | 0.253 | 0.274 | 0.247 | 0.242 | 0.236 | 0.243 | 0.297 | 0.251 |
+|    0.37 | 0.355 | 0.256 | 0.277 |  0.25 | 0.246 |  0.24 | 0.247 | 0.299 | 0.254 |
+|    1.43 | 0.387 | 0.326 | 0.329 | 0.329 | 0.326 | 0.328 | 0.324 | 0.339 | 0.326 |
+|    1.59 | 0.419 | 0.336 | 0.337 | 0.341 | 0.339 | 0.342 | 0.336 | 0.345 | 0.337 |
+|    2.49 | 0.452 | 0.396 | 0.381 | 0.405 | 0.408 | 0.417 | 0.405 |  0.38 | 0.399 |
+|    2.69 | 0.484 |  0.41 | 0.391 | 0.419 | 0.423 | 0.433 |  0.42 | 0.388 | 0.412 |
+|    3.24 | 0.516 | 0.445 | 0.418 | 0.457 | 0.463 | 0.474 | 0.461 | 0.409 | 0.449 |
+|    3.93 | 0.548 | 0.489 | 0.451 | 0.501 | 0.509 | 0.522 | 0.508 | 0.435 | 0.492 |
+|    4.07 | 0.581 | 0.497 | 0.458 | 0.509 | 0.518 | 0.531 | 0.517 |  0.44 | 0.501 |
+|       5 | 0.613 |  0.55 | 0.506 | 0.561 | 0.571 | 0.582 | 0.571 | 0.475 | 0.554 |
+|    6.31 | 0.645 | 0.612 | 0.573 |  0.62 | 0.626 | 0.634 | 0.626 | 0.521 | 0.614 |
+|    6.65 | 0.677 | 0.624 |  0.59 | 0.632 | 0.637 | 0.644 | 0.636 | 0.532 | 0.627 |
+|   11.34 |  0.71 |  0.72 | 0.715 |  0.72 | 0.721 | 0.721 | 0.722 | 0.657 |  0.72 |
+|   13.85 | 0.742 | 0.742 | 0.739 | 0.743 | 0.743 | 0.745 | 0.743 |   0.7 | 0.742 |
+|   29.73 | 0.774 | 0.783 | 0.783 | 0.783 | 0.783 | 0.783 | 0.783 | 0.783 | 0.783 |
+|   83.23 | 0.806 | 0.817 | 0.817 | 0.817 | 0.817 | 0.817 | 0.817 | 0.817 | 0.817 |
+|   98.46 | 0.839 |  0.85 |  0.85 |  0.85 |  0.85 |  0.85 |  0.85 | 0.855 |  0.85 |
+|   105.6 | 0.871 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.883 | 0.878 | 0.883 |
+|  147.84 | 0.903 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 |
+|  301.06 | 0.935 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |  0.95 |
+| 1675.64 | 0.968 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 | 0.983 |
+
+Abaixo apresenta-se a distância de Kolmogorov-Smirnoff entre a FDA empírica e a FDA calculada com base nas diferentes funções de kernel, ou seja, $\max | \hat{F}(x) - F_k^*(x) |$, sendo $\hat{F}(x)$ a função distribuição acumulada empírica e $F_k^*(x)$ a função distribuição acumulada obtida a partir da função densidade do kernel $k$, com $k=$ epanechnikov, uniform, quartic, triagular, triweight, gaussian, cosine e tricube. 
+
+#+BEGIN_SRC R :exports results :results values :colnames yes :session full_nonpar
+(varX_KS <- kdeVarX %>%
+   pivot_longer(
+     -c(varX.label,'pobs')
+    ,names_to = 'kernel'
+    ,values_to = 'step'
+   ) %>%
+   mutate(
+     kernel_nome = case_when(
+       kernel == 'triw' ~ 'Triweight'
+      ,kernel == 'quar' ~ 'Quartic'
+      ,kernel == 'tria' ~ 'Triangular'
+      ,kernel == 'tric' ~ 'Tricube'
+      ,kernel == 'cos'  ~ 'Cosine'
+      ,kernel == 'epan' ~ 'Epanechnikov'
+      ,kernel == 'unif' ~ 'Uniform'
+      ,kernel == 'gaus' ~ 'Gaussian'
+      ,TRUE ~ as.character(kernel)
+     )
+    ,KS = round( abs( step - pobs), casas.decimais)
+   ) %>%
+   group_by( kernel_nome, kernel ) %>%
+   summarise(
+     max_distance_KS = max(KS)
+   ) %>%
+   arrange( max_distance_KS ) %>%
+   as.data.frame
+)
+#+END_SRC
+
+#+RESULTS:
+| kernel_nome  | kernel | max_distance_KS |
+|--------------+--------+-----------------|
+| Triweight    | triw   |           0.162 |
+| Quartic      | quar   |           0.172 |
+| Tricube      | tric   |           0.173 |
+| Triangular   | tria   |           0.175 |
+| Cosine       | cos    |           0.183 |
+| Epanechnikov | epan   |           0.185 |
+| Uniform      | unif   |           0.211 |
+| Gaussian     | gaus   |           0.237 |
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      kdeVarX[ order(kdeVarX[,1]) , ]
+     ,digits= c(0, rep( casas.decimais, ncol(kdeVarX) ))
+     ,align="rc|c|c|c|c|c|c|c|c|c|"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/", varX.label,"_CDFKernels_table.tex")
+)
+
+## Exporta tabela de comparação das estatísticas de Kolmogorov-Smirnoff por kernel
+capture.output(
+  print(
+    xtable(
+      varX_KS[,c('kernel_nome','max_distance_KS')]
+     ,digits= c(0, 0, casas.decimais)
+     ,align="c|c|c|"
+    )
+   ,include.colnames=FALSE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/",varX.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+Como se pode notar, a função de kernel src_R[:results raw values :session full_nonpar]{varX_KS[1,'kernel']} responde pela menor distância em relação à função distribuição acumulada empírica. 
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## variáveis globais para gráficos da análise exploratória de dados
+var.dados    <- varX  ; var.label    <- varX.label
+kernel.abrev <- varX_KS[ 1,'kernel']
+kernel.compl <- varX_KS[ 1,'kernel_nome']
+
+## https://rdrr.io/cran/snpar/src/R/kde.R
+kern <- snpar::kde( var.dados, kernel = kernel.abrev, plot=FALSE)
+kern <- cbind( kern$xgrid, kern$fhat, kern$Fhat)
+kern <- kern[ order( kern[,1]), ]
+
+## exporta gráficos para artigo
+ylim_max <- round( digits = 2
+                 ,max(
+                    max(kern[,2]) # maior valor da densidade da função de kernel
+                   ,max( hist( var.dados, plot=FALSE)$density ) # maior valor da densidade do histograma
+                  )
+                  ) * (1 + 0.15)
+
+## Histograma, boxplot e densidades de kernel para varY
+pdf(file = paste0( './img/', var.label, '_histogram.pdf'), width=5, height=5)
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(8,1))
+par(mar=c(4, 4.1, 1.1, 2.1))
+hist(
+  var.dados
+ ,prob=TRUE
+ ,n=50
+ ,ylim=c(0, ylim_max )
+ ,xlab=''
+ ,main=''
+ ,ylab='densidade'
+)
+lines(
+  kern[,1]
+ ,kern[,2]
+ ,col='blue'
+ ,lwd=2
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y= ylim_max / 2
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = c('blue')
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+par(mar=c(0, 4.1, 1.1, 2.1))
+boxplot(
+  var.dados
+ ,horizontal=TRUE
+ ,xaxt="n"
+ ,frame=F
+)
+graphics.off()
+
+## FDA Empírica e FDA aproximada a partir da densidade de kernel
+pdf(file = paste0( './img/', var.label, '_ecdf.pdf'), width=5, height=5)
+plot(
+  ecdf( var.dados )
+ ,main = ''
+ ,xlab = ''
+ ,ylab = 'distribuição acumulada'
+ ,pch=20
+)
+lines(
+  kern[,1]
+ ,kern[,3]
+ ,type='l'
+ ,col='blue'
+ ,lwd=2
+ ,ylim=c(0,1)
+)
+legend(
+  x=10
+ ,y=0.60
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = 'blue'
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+graphics.off()
+#+END_SRC
+
+*** full_nonpar tabela KS transposta                               :noexport:
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## Tabela 1 do paper transposta (Distância de KS para D_max e Rf
+capture.output(
+  print(
+    xtable(
+      bind_rows( pivot_longer(data = varX_KS[,c(1,3)] %>% rename( '$KS (R_f)$' = max_distance_KS),cols = -kernel_nome)
+               ,pivot_longer(data = varY_KS[,c(1,3)] %>% rename( '$KS (D_{max})$' = max_distance_KS),cols = -kernel_nome)
+                ) %>%
+      arrange( name, kernel_nome ) %>%
+      pivot_wider(
+        id_cols = 'name', names_from = 'kernel_nome', values_from = 'value'
+      )
+     ,digits= c(0, 0, rep(casas.decimais, times=8))
+     ,align="c|c|c|c|c|c|c|c|c|c|"  
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0('./dados/',varX.label,"_",varY.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+*** Comparação gráfica das funções de kernel
+
+#+BEGIN_SRC R :exports results :results results graphics file :file ./img/Rf_Dmax_kernel_comparison.pdf :width 8 :height 10 :session full_nonpar
+par(mfrow=c(4,3))
+for(i in 1:10){
+  title <- ifelse(
+    i==1
+   ,'escala original'
+   ,ifelse(
+      i==2
+     ,'pseudo-observações'
+     ,paste(
+        'kernel:'
+       ,switch(
+          names(kdeVarX)[i]
+         ,'triw' = 'Triweight'
+         ,'quar' = 'Quartic'
+         ,'tria' = 'Triangular'
+         ,'tric' = 'Tricube'
+         ,'cos'  = 'Cosine'
+         ,'epan' = 'Epanechnikov'
+         ,'unif' = 'Uniform'
+         ,'gaus' = 'Gaussian'
+        )
+      )
+    )
+  )
+  x_lab <- ifelse( i==1, varX.label, paste0('u (',varX.label,')') )
+  y_lab <- ifelse( i==1, varY.label, paste0('v (',varY.label,')'))
+  plot(
+    x=kdeVarX[,i]
+   ,y=kdeVarY[,i]
+   ,main = title
+   ,pch=19
+   ,xlab=x_lab
+   ,ylab=y_lab
+  )
+}
+#+END_SRC
+
+
+
+\pagebreak
+
+
+** Estimação da dependência
+
+*** Marginais em pseudo-observações
+**** Cópula paramétrica (MPLE, pacote 'copula')
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+joe     <- fitCopula(     joeCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+gumbel  <- fitCopula(  gumbelCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+frank   <- fitCopula(   frankCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+normal  <- fitCopula(  normalCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+t       <- fitCopula(       tCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+clayton <- fitCopula( claytonCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+
+##  @loglik   --> log-verossimilhança
+##  @estimate --> theta_hat
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+ajustes <- data.frame(
+  copula     = c("joe","gumbel","frank","normal","clayton","t")
+ ,theta_mple = c(
+      round(joe@estimate,3)
+     ,round(gumbel@estimate,3)
+     ,round(frank@estimate,3)
+     ,round(normal@estimate,3)
+     ,round(clayton@estimate,3)
+     ,paste0( round(t@estimate[1],3), " (df=", round(t@estimate[2],3), ")" )
+  )
+ ,log_pseudolik = round(
+    c(
+      joe@loglik
+     ,gumbel@loglik
+     ,frank@loglik
+     ,normal@loglik
+     ,clayton@loglik
+     ,t@loglik[1])
+   ,3
+  )
+ ,BIC = round(
+    c(
+      joe@loglik - 0.5*length(joe@copula@parameters)*log(length(varX))
+     ,gumbel@loglik - 0.5*length(gumbel@copula@parameters)*log(length(varX))
+     ,frank@loglik - 0.5*length(frank@copula@parameters)*log(length(varX))
+     ,normal@loglik - 0.5*length(normal@copula@parameters)*log(length(varX))
+     ,clayton@loglik - 0.5*length(clayton@copula@parameters)*log(length(varX))
+     ,t@loglik - 0.5*length(t@copula@parameters)*log(length(varX))
+    )
+   ,3
+  )
+)
+semipar_pobs_bestfit <- normal
+(bondade_ajuste <- ajustes[ order( - ajustes$BIC ),] )
+#+END_SRC
+
+#+CAPTION: Bondade do ajuste (por ordem decrescente do BIC)
+#+RESULTS:
+| copula  |          theta_mple | log_pseudolik |    BIC |
+|---------+---------------------+---------------+--------|
+| normal  |               0.799 |        13.007 | 11.306 |
+| gumbel  |               2.329 |        12.716 | 11.015 |
+| frank   |               7.237 |        12.409 | 10.709 |
+| t       | 0.799 (df=1479.849) |        13.004 |  9.603 |
+| joe     |               2.888 |        11.136 |  9.435 |
+| clayton |               1.558 |         9.088 |  7.388 |
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+## destino <- './dados/comparativo_geral_BIC.tex'
+
+cat(
+  paste0(
+    "% ---------------------------------------------------------------------------------------- \n"
+   ## ,"% fonte:     0_Dissertacao/Aplicacoes/Barragens/artigo/full_nonpar/full_nonpar.org \n"
+   ,"\n"
+   ,"% Modelo: ",varY.label," em função de ",varX.label," \n"
+   ,"%   Coeficientes de dependência \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"RhoPearson}{" , signif(cor(varX,varY, method='pearson' ) ,5 ),"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"RhoSpearman}{", signif(cor(varX,varY, method='spearman') ,5 ),"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"TauKendall}{" , signif(cor(varX,varY, method='kendall' ) ,5 ),"} \n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+cat(
+  paste0(
+    "%   Marginais padronizadas pelas pseudo-observações \n"
+   ,"\n"
+   ,"%     Estimação Semi-Paramétrica da cópula \n"
+   ,"%       Máxima Pseudo-Verossimilhança - via função copula::copula \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsFamilia}{" , bondade_ajuste[ 1, 'copula' ],"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsTheta}{" , bondade_ajuste[ 1, 'theta_mple' ],"} \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsBIC}{"  , round(  semipar_pobs_bestfit@loglik - 0.5*length(semipar_pobs_bestfit@copula@parameters) *log(length(varX)), casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+#+END_SRC
+
+**** Cópula Não-paramétrica (Kernel, pacote 'kdecopula')
+	 
+#+BEGIN_SRC R :exports both :results output :session full_nonpar
+## marginais em pseudo-observações
+uv        <- data.frame( varX.pobs, varY.pobs)
+names(uv) <- c( varX.label, varY.label )
+
+## ajuste não-paramétrico por 3 métodos: T, TLL1 e TLL2
+bic.method.T    <- round(
+  BIC( fit.kdecop.T    <- kdecopula::kdecop( uv, method = 'T'    ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL1 <- round(
+  BIC( fit.kdecop.TLL1 <- kdecopula::kdecop( uv, method = 'TLL1' ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL2 <- round(
+  BIC( fit.kdecop.TLL2 <- kdecopula::kdecop( uv, method = 'TLL2' ) ) / (-2)
+ ,digits=casas.decimais
+)
+
+nonpar_pobs_bestfit <- fit.kdecop.T
+summary(nonpar_pobs_bestfit)
+
+## plot(uv, pch=19)
+## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
+## subset( ajustes, copula == 'normal')
+## plot(fit)
+#+END_SRC
+
+#+RESULTS:
+: Kernel copula density estimate (tau = 0.53)
+: ------------------------------
+: Variables:    Rf -- Dmax 
+: Observations: 30 
+: Method:       Transformation estimator ('T') 
+: Bandwidth:    matrix(c(0.52, 0.39, 0, 0.34), 2, 2)
+: ---
+: logLik: 16.9    AIC: -30.85    cAIC: -30.58    BIC: -28.78 
+: Effective number of parameters: 1.47
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+cat(
+  paste0(
+    "%     Estimação Não-Paramétrica - via função kdecopula::kdecop \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodT}{"  , round( bic.method.T, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodTLLum}{"  , round( bic.method.TLL1, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodTLLdois}{"  , round( bic.method.TLL2, casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+## gráficos de superfície
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'T','.pdf'), width=5, height=5)
+plot( fit.kdecop.T, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'TLL1','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL1, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'TLL2','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL2, xlab = 'u', ylab = 'v'  )
+graphics.off()
+#+END_SRC
+
+\pagebreak
+
+
+*** Marginais em funções de kernel
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+varX.kern <- kdeVarX[ , varX_KS[ 1, 'kernel' ] ]
+varY.kern <- kdeVarY[ , varY_KS[ 1, 'kernel' ] ]
+#+END_SRC
+
+**** Cópula paramétrica (MPLE, pacote 'copula')
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+joe     <- fitCopula(     joeCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+gumbel  <- fitCopula(  gumbelCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+frank   <- fitCopula(   frankCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+normal  <- fitCopula(  normalCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+t       <- fitCopula(       tCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+clayton <- fitCopula( claytonCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+
+##  @loglik   --> log-verossimilhança
+##  @estimate --> theta_hat
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+ajustes <- data.frame(
+  copula     = c("joe","gumbel","frank","normal","clayton","t")
+ ,theta_mple = c(
+      round(joe@estimate,3)
+     ,round(gumbel@estimate,3)
+     ,round(frank@estimate,3)
+     ,round(normal@estimate,3)
+     ,round(clayton@estimate,3)
+     ,paste0( round(t@estimate[1],3), " (df=", round(t@estimate[2],3), ")" )
+  )
+ ,log_pseudolik = round(
+    c(
+      joe@loglik
+     ,gumbel@loglik
+     ,frank@loglik
+     ,normal@loglik
+     ,clayton@loglik
+     ,t@loglik[1])
+   ,3
+  )
+ ,BIC = round(
+    c(
+      joe@loglik - 0.5*length(joe@copula@parameters)*log(length(varX))
+     ,gumbel@loglik - 0.5*length(gumbel@copula@parameters)*log(length(varX))
+     ,frank@loglik - 0.5*length(frank@copula@parameters)*log(length(varX))
+     ,normal@loglik - 0.5*length(normal@copula@parameters)*log(length(varX))
+     ,clayton@loglik - 0.5*length(clayton@copula@parameters)*log(length(varX))
+     ,t@loglik - 0.5*length(t@copula@parameters)*log(length(varX))
+    )
+   ,3
+  )
+)
+semipar_kern_bestfit <- clayton
+(bondade_ajuste <- ajustes[ order( - ajustes$BIC ),] )
+#+END_SRC
+
+#+CAPTION: Bondade do ajuste (por ordem decrescente do BIC)
+#+RESULTS:
+| copula  |       theta_mple | log_pseudolik |    BIC |
+|---------+------------------+---------------+--------|
+| clayton |            2.694 |        13.065 | 11.365 |
+| normal  |            0.797 |        12.155 | 10.454 |
+| t       | 0.781 (df=1.876) |        13.245 |  9.844 |
+| gumbel  |            2.242 |        11.434 |  9.734 |
+| frank   |            7.007 |        10.895 |  9.194 |
+| joe     |            2.475 |         9.452 |  7.752 |
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+
+cat(
+  paste0(
+    "%   Marginais padronizadas pelas densidades de Kernel \n"
+   ,"\n"
+   ,"%     Kernel mais adequado (segundo Distância de Kolmogorov-Smirnoff) por variável \n"
+   ,"\\newcommand{\\",varY.label,"KernelNome}{", varY_KS[ 1, 'kernel'] ,"} \n"
+   ,"\\newcommand{\\",varY.label,"KernelKS}{"  , round( varY_KS[ 1, 'max_distance_KS'], casas.decimais) ,"} \n"
+   ,"\\newcommand{\\",varX.label,"KernelNome}{", varX_KS[ 1, 'kernel'] ,"} \n"
+   ,"\\newcommand{\\",varX.label,"KernelKS}{"  , round( varX_KS[ 1, 'max_distance_KS'], casas.decimais) ,"} \n"
+   ,"\n"
+   ,"%     Estimação Semi-Paramétrica da cópula \n"
+   ,"%       Máxima Pseudo-Verossimilhança - via função copula::copula \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernFamilia}{" , bondade_ajuste[ 1, 'copula' ],"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernTheta}{" , bondade_ajuste[ 1, 'theta_mple' ],"} \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernBIC}{"  , round(  semipar_kern_bestfit@loglik - 0.5*length(semipar_kern_bestfit@copula@parameters) *log(length(varX)), casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+#+END_SRC
+
+**** Cópula Não-paramétrica (Kernel, pacote 'kdecopula')
+
+#+BEGIN_SRC R :exports both :results output :session full_nonpar
+## marginais em kernel
+uv        <- data.frame( varX.kern, varY.kern )
+names(uv) <- c( varX.label, varY.label )
+
+## ajuste não-paramétrico por 3 métodos: T, TLL1 e TLL2
+bic.method.T    <- round(
+  BIC( fit.kdecop.T    <- kdecopula::kdecop( uv, method = 'T'    ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL1 <- round(
+  BIC( fit.kdecop.TLL1 <- kdecopula::kdecop( uv, method = 'TLL1' ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL2 <- round(
+  BIC( fit.kdecop.TLL2 <- kdecopula::kdecop( uv, method = 'TLL2' ) ) / (-2)
+ ,digits=casas.decimais
+)
+
+nonpar_kern_bestfit <- fit.kdecop.T
+summary(nonpar_kern_bestfit)
+
+## plot(uv, pch=19)
+## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
+## subset( ajustes, copula == 'normal')
+## plot(fit)
+#+END_SRC
+
+#+RESULTS:
+: Kernel copula density estimate (tau = 0.52)
+: ------------------------------
+: Variables:    Rf -- Dmax 
+: Observations: 30 
+: Method:       Transformation estimator ('T') 
+: Bandwidth:    matrix(c(0.48, 0.38, 0, 0.35), 2, 2)
+: ---
+: logLik: 16.27    AIC: -29.47    cAIC: -29.19    BIC: -27.33 
+: Effective number of parameters: 1.53
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+cat(
+  paste0(
+    "%     Estimação Não-Paramétrica - via função kdecopula::kdecop \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodT}{"     , round( bic.method.T   , casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodTLLum}{"  , round( bic.method.TLL1, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodTLLdois}{"  , round( bic.method.TLL2, casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+## gráficos de superfície
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'T','.pdf'), width=5, height=5)
+plot( fit.kdecop.T, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'TLL1','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL1, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'TLL2','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL2, xlab = 'u', ylab = 'v'  )
+graphics.off()
+#+END_SRC
+
+
+** $Prob( V > v | U \in (a,b] )$
+
+   $$Prob( V > v | U \in (a,b] ) = 1 - \frac{C(b,x)}{b-a} + \frac{C(a,x)}{b-a}   $$
+
+   Probabilidade condicional $Prob( V > v | U \in (a,b] )$, utilizando a cópula paramétrica (estimação do parâmetro de associação via máxima pseudo-verossimilhança) calculada com base nas marginais reescaladas pelas pseudo-observações (ref. aos postos das observações originais).
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Cálculo da Probabilidade Condicional Prob( V > v | U \in (a,b] )
+##
+## Estimação semi-paramétrica
+##   marginais corrigidas pelas pseudo-observações
+##   e cópula paramétrica estimada via MPLE
+##
+## Análise para (1) Dmax ~ R and (2) Dmax ~ Rf
+prob_Vgtv_given_UinInterval_semipar <- function( v, a, b, theta, family ) {
+    ## Expression for P( V>v | U \in (a,b], \theta )
+    if ( v<0 || v>1 ) stop('v outside domain [0,1].          ')
+    if ( a<0 || a>1 ) stop('a in (a,b] outside domain [0,1]. ')
+    if ( b<0 || b>1 ) stop('b in (a,b] outside domain [0,1]. ')
+    if ( a>b )        stop('a greater then b in (a,b]        ')
+    aux_b    <- pCopula( c(b,v), family( param=theta, dim=2) ) / ( b - a )
+    aux_a    <- pCopula( c(a,v), family( param=theta, dim=2) ) / ( b - a )
+    result   <- 1 - ( (aux_b) - (aux_a) )
+    return( round( result, digits = casas.decimais ) )
+}
+## check: prob_Vgtv_given_UinInterval_semipar( v=0.9, a=0.75, b=1, theta=3, family = gumbelCopula )
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+## ========================================================================================================
+## Analysis (1) Dmax ~ R and (2) Dmax ~ Rf 
+##   Row    U: {(0,0.25] (0.25,0.50] (0.50,0.75] (0.75,1.00] }
+##   Column V: {.7 .75 .8 .85 .9 .95}
+##   Formula : P( V>v | U \in (a,b], \theta )
+## varying for \theta (Uninf prior or sgamma/trbeta) and copula family (Gumbel and Gaussian)
+
+ranks     <- seq( from=0.7, to=0.95, by=0.05)
+intervals <- data.frame(
+    a = c( 0   , 0.25, 0.50, 0.75 )
+   ,b = c( 0.25, 0.50, 0.75, 1.00 )
+    )
+
+## https://tidyr.tidyverse.org/reference/expand_grid.html
+## Lay all possible combinations of ranks and intervals
+cross.ranks.intervals <- expand_grid( intervals, ranks)
+
+## Calculate P(V>v | U \in (a,b], \theta)
+##  1. for all combinations of ranks and intervals
+##  2. types of priors (uninformative, shifted gamma and transformed beta)
+##  3. copula famillies (gumbel and normal)
+##  4. models (Dmax ~ R and Dmax ~ Rf)
+cond_prob_semipar <- cbind(
+  cross.ranks.intervals
+ ,prob_Vgtv_given_U = apply(
+    cross.ranks.intervals
+   ,MARGIN = 1
+   ,FUN = function(x) prob_Vgtv_given_UinInterval_semipar(
+                        v = x[3]
+                       ,a = x[1]
+                       ,b = x[2]
+                       ,theta = semipar_pobs_bestfit@estimate
+                       ,family = normalCopula
+                      )
+  ) %>% round(., digits = casas.decimais )
+)
+cond_prob_semipar$estimation <- 'semipar_pobs'
+cond_prob_semipar[, paste0( varX.label,'_a') ] <- 0
+cond_prob_semipar[, paste0( varX.label,'_b') ] <- 0
+cond_prob_semipar[, varY.label ] <- 0
+
+## subset para retornar à escala original
+tmp1 <- data.frame(
+  kdeVarX[ , varX.label ] # R_f na escala original
+ ,kdeVarY[ , varY.label ] # D_max na escala original
+ ,kdeVarX[ , 'pobs'     ] # R_f   reescalado para [0,1] usando pseudo-observações
+ ,kdeVarY[ , 'pobs'     ] # D_max reescalado para [0,1] usando pseudo-observações
+)
+names(tmp1) <- c( varX.label, varY.label, 'U_orig_pobs', 'V_orig_pobs')
+
+for (i in 1:nrow(cond_prob_semipar)) {
+  ## escala original
+  ##  Rf_a e Rf_b
+  cond_prob_semipar[i, paste0( varX.label,'_a')] <- tmp1$Rf[ which.min( abs( cond_prob_semipar[i,'a'] - tmp1[, 'U_orig_pobs']) ) ]
+  cond_prob_semipar[i, paste0( varX.label,'_b')] <- tmp1$Rf[ which.min( abs( cond_prob_semipar[i,'b'] - tmp1[, 'U_orig_pobs']) ) ]
+  ##  D_max  
+  cond_prob_semipar[i, varY.label] <- tmp1$Dmax[ which.min( abs( cond_prob_semipar[i, 'ranks'] - tmp1[, 'V_orig_pobs']) ) ]
+} 
+cond_prob_semipar
+#+END_SRC
+
+#+RESULTS:
+|    a |    b | ranks | prob_Vgtv_given_U | estimation   |  Rf_a |    Rf_b | Dmax |
+|------+------+-------+-------------------+--------------+-------+---------+------|
+|    0 | 0.25 |   0.7 |             0.012 | semipar_pobs |  0.01 |    0.22 |   12 |
+|    0 | 0.25 |  0.75 |             0.006 | semipar_pobs |  0.01 |    0.22 |   25 |
+|    0 | 0.25 |   0.8 |             0.003 | semipar_pobs |  0.01 |    0.22 |   41 |
+|    0 | 0.25 |  0.85 |             0.001 | semipar_pobs |  0.01 |    0.22 |   45 |
+|    0 | 0.25 |   0.9 |                 0 | semipar_pobs |  0.01 |    0.22 |  110 |
+|    0 | 0.25 |  0.95 |                 0 | semipar_pobs |  0.01 |    0.22 |  120 |
+| 0.25 |  0.5 |   0.7 |             0.104 | semipar_pobs |  0.22 |    3.24 |   12 |
+| 0.25 |  0.5 |  0.75 |             0.066 | semipar_pobs |  0.22 |    3.24 |   25 |
+| 0.25 |  0.5 |   0.8 |             0.038 | semipar_pobs |  0.22 |    3.24 |   41 |
+| 0.25 |  0.5 |  0.85 |             0.018 | semipar_pobs |  0.22 |    3.24 |   45 |
+| 0.25 |  0.5 |   0.9 |             0.007 | semipar_pobs |  0.22 |    3.24 |  110 |
+| 0.25 |  0.5 |  0.95 |             0.001 | semipar_pobs |  0.22 |    3.24 |  120 |
+|  0.5 | 0.75 |   0.7 |             0.335 | semipar_pobs |  3.24 |   13.85 |   12 |
+|  0.5 | 0.75 |  0.75 |             0.252 | semipar_pobs |  3.24 |   13.85 |   25 |
+|  0.5 | 0.75 |   0.8 |             0.174 | semipar_pobs |  3.24 |   13.85 |   41 |
+|  0.5 | 0.75 |  0.85 |             0.106 | semipar_pobs |  3.24 |   13.85 |   45 |
+|  0.5 | 0.75 |   0.9 |              0.05 | semipar_pobs |  3.24 |   13.85 |  110 |
+|  0.5 | 0.75 |  0.95 |             0.013 | semipar_pobs |  3.24 |   13.85 |  120 |
+| 0.75 |    1 |   0.7 |              0.75 | semipar_pobs | 13.85 | 1675.64 |   12 |
+| 0.75 |    1 |  0.75 |             0.675 | semipar_pobs | 13.85 | 1675.64 |   25 |
+| 0.75 |    1 |   0.8 |             0.585 | semipar_pobs | 13.85 | 1675.64 |   41 |
+| 0.75 |    1 |  0.85 |             0.475 | semipar_pobs | 13.85 | 1675.64 |   45 |
+| 0.75 |    1 |   0.9 |             0.343 | semipar_pobs | 13.85 | 1675.64 |  110 |
+| 0.75 |    1 |  0.95 |             0.186 | semipar_pobs | 13.85 | 1675.64 |  120 |
+
+Probabilidade condicional $Prob( V > v | U \in (a,b] )$, utilizando a cópula não-paramétrica (estimação do parâmetro de associação via funções de kernel) calculada com base nas marginais reescaladas pelas funções de distribuição acumuladas provenientes da estimação das funções densidade de probabilidade obtidas via funções de kernel.
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Estimação não-paramétrica completa
+##   marginais corrigidas pelas FDA baseadas na fdp de kernel
+##   e cópula não-paramétrica estimada via pacote kdecopula
+##
+prob_Vgtv_given_UinInterval_nonpar <- function( v, a, b, nonpar_copula ) {
+    ## Expression for P( V>v | U \in (a,b], \theta )
+    if ( v<0 || v>1 ) stop('v outside domain [0,1].          ')
+    if ( a<0 || a>1 ) stop('a in (a,b] outside domain [0,1]. ')
+    if ( b<0 || b>1 ) stop('b in (a,b] outside domain [0,1]. ')
+    if ( a>b )        stop('a greater then b in (a,b]        ')
+    aux_b    <- pkdecop( c(b,v), nonpar_copula ) / ( b - a )
+    aux_a    <- pkdecop( c(a,v), nonpar_copula ) / ( b - a )
+    result   <- 1 - ( (aux_b) - (aux_a) )
+    return( round(result, digits = casas.decimais) )
+}
+## check: prob_Vgtv_given_UinInterval_nonpar( v=0.9, a=0.75, b=1, nonpar_copula = fit.kdecop.T )
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+## Calculate P(V>v | U \in (a,b], \theta)
+##  1. for all combinations of ranks and intervals
+##  2. types of priors (uninformative, shifted gamma and transformed beta)
+##  3. copula famillies (gumbel and normal)
+##  4. models (Dmax ~ R and Dmax ~ Rf)
+cond_prob_nonpar <- cbind(
+  cross.ranks.intervals
+ ,prob_Vgtv_given_U = apply(
+    cross.ranks.intervals
+   ,MARGIN = 1
+   ,FUN = function(x) prob_Vgtv_given_UinInterval_nonpar(
+                        v = x[3]
+                       ,a = x[1]
+                       ,b = x[2]
+                       ,nonpar_copula = nonpar_kern_bestfit
+                      )
+  )
+)
+cond_prob_nonpar$estimation <- 'nonpar_kern'
+cond_prob_nonpar[, paste0( varX.label,'_a') ] <- 0
+cond_prob_nonpar[, paste0( varX.label,'_b') ] <- 0
+cond_prob_nonpar[, varY.label ] <- 0
+
+## subset para retornar à escala original
+tmp1 <- data.frame(
+  kdeVarX[ , varX.label ] # R_f na escala original
+ ,kdeVarY[ , varY.label ] # D_max na escala original
+ ,kdeVarX[ , varX_KS[1, 'kernel'] ] # R_f   reescalado para [0,1] usando função de kernel
+ ,kdeVarY[ , varY_KS[1, 'kernel'] ] # D_max reescalado para [0,1] usando função de kernel
+)
+names(tmp1) <- c( varX.label, varY.label, 'U_orig_kern', 'V_orig_kern')
+
+for (i in 1:nrow(cond_prob_nonpar)) {
+  ## escala original
+  ##  Rf_a e Rf_b
+  cond_prob_nonpar[i, paste0( varX.label,'_a')] <- tmp1[ which.min( abs( cond_prob_nonpar[i,'a'] - tmp1[, 'U_orig_kern']) ), varX.label ]
+  cond_prob_nonpar[i, paste0( varX.label,'_b')] <- tmp1[ which.min( abs( cond_prob_nonpar[i,'b'] - tmp1[, 'U_orig_kern']) ), varX.label ]
+  ##  D_max  
+  cond_prob_nonpar[i, varY.label] <- tmp1[ which.min( abs( tmp1[, 'V_orig_kern'] - cond_prob_nonpar[i,'ranks'] ) ) , varY.label]
+} 
+cond_prob_nonpar
+#+END_SRC
+
+#+RESULTS:
+|    a |    b | ranks | prob_Vgtv_given_U | estimation  |  Rf_a |    Rf_b | Dmax |
+|------+------+-------+-------------------+-------------+-------+---------+------|
+|    0 | 0.25 |   0.7 |             0.034 | nonpar_kern |  0.01 |    0.37 |   12 |
+|    0 | 0.25 |  0.75 |             0.027 | nonpar_kern |  0.01 |    0.37 |   12 |
+|    0 | 0.25 |   0.8 |             0.023 | nonpar_kern |  0.01 |    0.37 |   25 |
+|    0 | 0.25 |  0.85 |              0.02 | nonpar_kern |  0.01 |    0.37 |   45 |
+|    0 | 0.25 |   0.9 |             0.019 | nonpar_kern |  0.01 |    0.37 |   80 |
+|    0 | 0.25 |  0.95 |             0.018 | nonpar_kern |  0.01 |    0.37 |  120 |
+| 0.25 |  0.5 |   0.7 |             0.144 | nonpar_kern |  0.37 |    3.93 |   12 |
+| 0.25 |  0.5 |  0.75 |             0.102 | nonpar_kern |  0.37 |    3.93 |   12 |
+| 0.25 |  0.5 |   0.8 |             0.067 | nonpar_kern |  0.37 |    3.93 |   25 |
+| 0.25 |  0.5 |  0.85 |             0.038 | nonpar_kern |  0.37 |    3.93 |   45 |
+| 0.25 |  0.5 |   0.9 |             0.015 | nonpar_kern |  0.37 |    3.93 |   80 |
+| 0.25 |  0.5 |  0.95 |                 0 | nonpar_kern |  0.37 |    3.93 |  120 |
+|  0.5 | 0.75 |   0.7 |             0.383 | nonpar_kern |  3.93 |   13.85 |   12 |
+|  0.5 | 0.75 |  0.75 |             0.297 | nonpar_kern |  3.93 |   13.85 |   12 |
+|  0.5 | 0.75 |   0.8 |             0.215 | nonpar_kern |  3.93 |   13.85 |   25 |
+|  0.5 | 0.75 |  0.85 |             0.141 | nonpar_kern |  3.93 |   13.85 |   45 |
+|  0.5 | 0.75 |   0.9 |             0.078 | nonpar_kern |  3.93 |   13.85 |   80 |
+|  0.5 | 0.75 |  0.95 |             0.024 | nonpar_kern |  3.93 |   13.85 |  120 |
+| 0.75 |    1 |   0.7 |             0.645 | nonpar_kern | 13.85 | 1675.64 |   12 |
+| 0.75 |    1 |  0.75 |             0.579 | nonpar_kern | 13.85 | 1675.64 |   12 |
+| 0.75 |    1 |   0.8 |             0.501 | nonpar_kern | 13.85 | 1675.64 |   25 |
+| 0.75 |    1 |  0.85 |             0.406 | nonpar_kern | 13.85 | 1675.64 |   45 |
+| 0.75 |    1 |   0.9 |             0.294 | nonpar_kern | 13.85 | 1675.64 |   80 |
+| 0.75 |    1 |  0.95 |             0.163 | nonpar_kern | 13.85 | 1675.64 |  120 |
+
+\pagebreak
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Comparação da probabilidade condicional usando marginais
+##   em escala [0,1]
+##
+##
+cond_prob_compara <- bind_rows(
+  ## estimação semiparamétrica usando pseudo-observações
+  cond_prob_semipar %>%
+  rename( limiar = ranks) %>%
+  mutate(
+    intervalo = paste0('(',a,', ',b,']')
+   ,modelo = paste0('01_',varY.label,'_',varX.label)
+   ,marginais = '01_pobs'
+  ) %>%
+  select( intervalo, limiar, modelo, marginais, prob_Vgtv_given_U)
+ ,
+  ## estimação não-parametrica usando marginais corrigidas pelo kernel
+  cond_prob_nonpar %>%
+  rename( limiar = ranks) %>%
+  mutate(
+    intervalo = paste0('(',a,', ',b,']')
+   ,modelo = paste0('01_',varY.label,'_',varX.label)
+   ,marginais = '02_kernel'
+  ) %>%
+  select( intervalo, limiar, modelo, marginais, prob_Vgtv_given_U)
+)
+
+## Probabilidade condicional usando marginais
+##   em escala original e estimação não-paramétrica completa
+##
+##
+cond_prob_escala_original_Dmax_Rf <- cond_prob_nonpar %>%
+  rename(
+    prob_cond = prob_Vgtv_given_U
+    ,limiar = Dmax
+  ) %>%
+  mutate(
+    intervalo = paste0('(', Rf_a,', ',Rf_b,']')
+   ,intervalo = ifelse( ranks == 0.70, intervalo, '')
+  ) %>%
+  select( intervalo, limiar, prob_cond )
+
+## exporta resultados da comparação entre semipar e nonpar
+cond_prob_escala_original_Dmax_Rf %>%
+  xtable( digits= c(0,0,1,casas.decimais) ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = FALSE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_prob_escala_original_Dmax_Rf_formato_longo.tex'
+  )
+#+END_SRC
+
+\pagebreak
+
+
+* $D_{\textrm{max}}$ em função de $R$
+  
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+dt.sub <- na.omit(
+  dt[, c("Dmax","R","No") ]
+)
+dt.sub <- merge(
+    dt.sub
+   ,names
+   ,by="No"
+)
+label      <- dt.sub$Mine
+
+varX       <- dt.sub$R
+varX.pobs  <- rank( varX ) / ( length( varX ) + 1 )
+varX.label <- "R"
+
+varY       <- dt.sub$Dmax
+varY.pobs  <- rank( varY ) / ( length( varY ) + 1 )
+varY.label <- "Dmax"
+#+END_SRC
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Gráfico de dispersão
+suppressMessages(
+  ggsave(
+    filename = paste0('./img/',varX.label,'_',varY.label,'_scatter_labels.pdf')
+   ,plot = ggplot(
+      data.frame(
+        varX
+       ,varY
+       ,label=ifelse(varY>8,label,"")
+      )
+     ,aes(
+        varX
+       ,varY
+       ,label=label
+      )
+    ) +
+      labs(x=varX.label, y=varY.label)+
+      geom_point(shape=19, color="black", size=2) +
+      theme_bw() +
+      theme( text = element_text(size=12),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_text(hjust = 0.5)
+            )+
+      geom_text_repel()
+   ,device="pdf"
+   ,width=5
+   ,height=5
+  )
+)
+#+END_SRC
+
+\pagebreak
+
+** Estimação das marginais
+
+A estimação das marginais src_R[:results raw values :session full_nonpar]{varY.label} e src_R[:results raw values :session full_nonpar]{varX.label} se dará não-parametricamente de duas formas: (1) via pseudo-observações e (2) via densidades de kernel. 
+
+Com base no pacote =snpar= do software =GNU R= estimou-se a função densidade de probabilidade com base em diferentes funções de kernel e, finalmente, obteve-se uma estimativa para a função distribuição acumulada, calculada a partir da função densidade de kernel.
+
+*** src_R[:results raw values :session full_nonpar]{varY.label}
+
+Na tabela abaixo é apresentada uma comparação entre as pseudo-observações e as funções de distribuição acumulada para os diferentes kernels.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+kdeVarY <- data.frame(
+  varY
+ ,pobs = rank( varY ) / ( length( varY ) + 1 )
+ ,epan = snpar::kde( x = varY, kernel='epan', plot=FALSE)$Fhat
+ ,unif = snpar::kde( x = varY, kernel='unif', plot=FALSE)$Fhat
+ ,tria = snpar::kde( x = varY, kernel='tria', plot=FALSE)$Fhat
+ ,quar = snpar::kde( x = varY, kernel='quar', plot=FALSE)$Fhat
+ ,triw = snpar::kde( x = varY, kernel='triw', plot=FALSE)$Fhat
+ ,tric = snpar::kde( x = varY, kernel='tric', plot=FALSE)$Fhat
+ ,gaus = snpar::kde( x = varY, kernel='gaus', plot=FALSE)$Fhat
+ ,cos  = snpar::kde( x = varY, kernel='cos' , plot=FALSE)$Fhat
+)
+colnames(kdeVarY)[1] <- varY.label
+
+kdeVarY[ order(kdeVarY[,1]) , ] %>% round(., casas.decimais)
+#+END_SRC
+
+#+RESULTS:
+| Dmax |  pobs |  epan |  unif |  tria |  quar |  triw |  tric |  gaus |   cos |
+|------+-------+-------+-------+-------+-------+-------+-------+-------+-------|
+| 0.03 | 0.029 | 0.155 | 0.178 | 0.147 | 0.145 | 0.138 | 0.146 | 0.224 | 0.153 |
+|  0.1 | 0.057 | 0.159 | 0.181 | 0.151 | 0.148 | 0.142 |  0.15 | 0.226 | 0.157 |
+| 0.15 |   0.1 | 0.161 | 0.183 | 0.154 | 0.151 | 0.145 | 0.152 | 0.228 | 0.159 |
+| 0.15 |   0.1 | 0.161 | 0.183 | 0.154 | 0.151 | 0.145 | 0.152 | 0.228 | 0.159 |
+|  0.3 | 0.157 | 0.169 |  0.19 | 0.163 |  0.16 | 0.155 |  0.16 | 0.234 | 0.167 |
+|  0.3 | 0.157 | 0.169 |  0.19 | 0.163 |  0.16 | 0.155 |  0.16 | 0.234 | 0.167 |
+| 0.61 |   0.2 | 0.185 | 0.204 | 0.182 | 0.178 | 0.174 | 0.177 | 0.245 | 0.184 |
+|  0.8 | 0.243 | 0.196 | 0.213 | 0.194 | 0.189 | 0.187 | 0.188 | 0.253 | 0.194 |
+|  0.8 | 0.243 | 0.196 | 0.213 | 0.194 | 0.189 | 0.187 | 0.188 | 0.253 | 0.194 |
+|  1.3 | 0.286 | 0.224 | 0.236 | 0.225 |  0.22 |  0.22 | 0.218 | 0.273 | 0.223 |
+|  1.5 | 0.314 | 0.235 | 0.245 | 0.237 | 0.233 | 0.234 | 0.231 | 0.281 | 0.235 |
+|  2.5 | 0.343 | 0.296 |   0.3 |   0.3 | 0.299 | 0.302 | 0.297 | 0.322 | 0.297 |
+|    4 | 0.371 | 0.394 | 0.384 | 0.395 | 0.399 | 0.401 |   0.4 | 0.385 | 0.395 |
+|    5 | 0.443 | 0.457 |  0.44 | 0.458 | 0.461 | 0.461 | 0.463 | 0.428 | 0.458 |
+|    5 | 0.443 | 0.457 |  0.44 | 0.458 | 0.461 | 0.461 | 0.463 | 0.428 | 0.458 |
+|    5 | 0.443 | 0.457 |  0.44 | 0.458 | 0.461 | 0.461 | 0.463 | 0.428 | 0.458 |
+|    5 | 0.443 | 0.457 |  0.44 | 0.458 | 0.461 | 0.461 | 0.463 | 0.428 | 0.458 |
+|  5.2 | 0.514 | 0.469 | 0.452 |  0.47 | 0.473 | 0.473 | 0.474 | 0.436 |  0.47 |
+|    6 | 0.543 | 0.514 | 0.499 | 0.516 | 0.517 | 0.519 | 0.518 |  0.47 | 0.514 |
+|    7 | 0.571 | 0.563 | 0.554 | 0.566 | 0.568 | 0.572 | 0.567 |  0.51 | 0.564 |
+|    8 | 0.643 | 0.607 | 0.595 | 0.613 | 0.615 | 0.621 | 0.614 | 0.548 | 0.609 |
+|    8 | 0.643 | 0.607 | 0.595 | 0.613 | 0.615 | 0.621 | 0.614 | 0.548 | 0.609 |
+|    8 | 0.643 | 0.607 | 0.595 | 0.613 | 0.615 | 0.621 | 0.614 | 0.548 | 0.609 |
+|    8 | 0.643 | 0.607 | 0.595 | 0.613 | 0.615 | 0.621 | 0.614 | 0.548 | 0.609 |
+|   12 | 0.743 | 0.739 | 0.725 | 0.742 | 0.745 | 0.747 | 0.745 | 0.673 |  0.74 |
+|   12 | 0.743 | 0.739 | 0.725 | 0.742 | 0.745 | 0.747 | 0.745 | 0.673 |  0.74 |
+|   12 | 0.743 | 0.739 | 0.725 | 0.742 | 0.745 | 0.747 | 0.745 | 0.673 |  0.74 |
+|   25 |   0.8 | 0.809 | 0.809 | 0.809 | 0.809 | 0.809 | 0.809 | 0.807 | 0.809 |
+|   41 | 0.829 | 0.841 | 0.844 |  0.84 |  0.84 | 0.839 | 0.839 | 0.846 | 0.841 |
+|   45 | 0.857 | 0.865 | 0.862 | 0.866 | 0.866 | 0.867 | 0.866 |  0.86 | 0.865 |
+|   80 | 0.886 | 0.897 | 0.897 | 0.897 | 0.897 | 0.897 | 0.897 | 0.897 | 0.897 |
+|  110 | 0.914 | 0.926 | 0.926 | 0.926 | 0.926 | 0.926 | 0.926 | 0.928 | 0.926 |
+|  120 | 0.943 | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 | 0.954 | 0.956 |
+|  637 | 0.971 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 |
+
+Abaixo apresenta-se a distância de Kolmogorov-Smirnoff entre a FDA empírica e a FDA calculada com base nas diferentes funções de kernel, ou seja, $\max | \hat{F}(x) - F_k^*(x) |$, sendo $\hat{F}(x)$ a função distribuição acumulada empírica e $F_k^*(x)$ a função distribuição acumulada obtida a partir da função densidade do kernel $k$, com $k=$ epanechnikov, uniform, quartic, triagular, triweight, gaussian, cosine e tricube. 
+
+#+BEGIN_SRC R :exports results :results values :colnames yes :session full_nonpar
+(varY_KS <- kdeVarY %>%
+   pivot_longer(
+     -c(varY.label,'pobs')
+    ,names_to = 'kernel'
+    ,values_to = 'step'
+   ) %>%
+   mutate(
+     kernel_nome = case_when(
+       kernel == 'triw' ~ 'Triweight'
+      ,kernel == 'quar' ~ 'Quartic'
+      ,kernel == 'tria' ~ 'Triangular'
+      ,kernel == 'tric' ~ 'Tricube'
+      ,kernel == 'cos'  ~ 'Cosine'
+      ,kernel == 'epan' ~ 'Epanechnikov'
+      ,kernel == 'unif' ~ 'Uniform'
+      ,kernel == 'gaus' ~ 'Gaussian'
+      ,TRUE ~ as.character(kernel)
+     )
+    ,KS = round( abs( step - pobs), casas.decimais)
+   ) %>%
+   group_by( kernel_nome, kernel ) %>%
+   summarise(
+     max_distance_KS = max(KS)
+   ) %>%
+   arrange( max_distance_KS ) %>%
+   as.data.frame
+)
+#+END_SRC
+
+#+RESULTS:
+| kernel_nome  | kernel | max_distance_KS |
+|--------------+--------+-----------------|
+| Triweight    | triw   |            0.11 |
+| Quartic      | quar   |           0.116 |
+| Tricube      | tric   |           0.117 |
+| Triangular   | tria   |           0.119 |
+| Cosine       | cos    |           0.125 |
+| Epanechnikov | epan   |           0.126 |
+| Uniform      | unif   |           0.149 |
+| Gaussian     | gaus   |           0.195 |
+
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      kdeVarY[ order(kdeVarY[,1]) , ]
+     ,digits= c(0, rep( casas.decimais, ncol(kdeVarY) ))
+     ,align="rc|c|c|c|c|c|c|c|c|c|"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/", varY.label,"_CDFKernels_table.tex")
+)
+
+## Exporta tabela de comparação das estatísticas de Kolmogorov-Smirnoff por kernel
+capture.output(
+  print(
+    xtable(
+      varY_KS[,c('kernel_nome','max_distance_KS')]
+     ,digits= c(0, 0, casas.decimais)
+     ,align="c|c|c"
+    )
+   ,include.colnames=FALSE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/",varY.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+Como se pode notar, a função de kernel src_R[:results raw values :session full_nonpar]{varY_KS[1,'kernel_nome']} responde pela menor distância em relação à função distribuição acumulada empírica. 
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## variáveis globais para gráficos da análise exploratória de dados
+var.dados    <- varY  ; var.label    <- varY.label
+kernel.abrev <- varY_KS[ 1,'kernel']
+kernel.compl <- varY_KS[ 1,'kernel_nome']
+
+## https://rdrr.io/cran/snpar/src/R/kde.R
+kern <- snpar::kde( var.dados, kernel = kernel.abrev, plot=FALSE)
+kern <- cbind( kern$xgrid, kern$fhat, kern$Fhat)
+kern <- kern[ order( kern[,1]), ]
+
+## exporta gráficos para artigo
+ylim_max <- round( digits = 2
+                 ,max(
+                    max(kern[,2]) # maior valor da densidade da função de kernel
+                   ,max( hist( var.dados, plot=FALSE)$density ) # maior valor da densidade do histograma
+                  )
+                  ) * (1 + 0.15)
+
+## Histograma, boxplot e densidades de kernel para varY
+pdf(file = paste0( './img/', var.label, '_histogram.pdf'), width=5, height=5)
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(8,1))
+par(mar=c(4, 4.1, 1.1, 2.1))
+hist(
+  var.dados
+ ,prob=TRUE
+ ,n=50
+ ,ylim=c(0, ylim_max )
+ ,xlab=''
+ ,main=''
+ ,ylab='densidade'
+)
+lines(
+  kern[,1]
+ ,kern[,2]
+ ,col='blue'
+ ,lwd=2
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y= ylim_max / 2
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = c('blue')
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+par(mar=c(0, 4.1, 1.1, 2.1))
+boxplot(
+  var.dados
+ ,horizontal=TRUE
+ ,xaxt="n"
+ ,frame=F
+)
+graphics.off()
+
+## FDA Empírica e FDA aproximada a partir da densidade de kernel
+pdf(file = paste0( './img/', var.label, '_ecdf.pdf'), width=5, height=5)
+plot(
+  ecdf( var.dados )
+ ,main = ''
+ ,xlab = ''
+ ,ylab = 'distribuição acumulada'
+ ,pch=20
+)
+lines(
+  kern[,1]
+ ,kern[,3]
+ ,type='l'
+ ,col='blue'
+ ,lwd=2
+ ,ylim=c(0,1)
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y=0.60
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = 'blue'
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+graphics.off()
+#+END_SRC
+
+*** src_R[:results raw values :session full_nonpar]{varX.label}
+
+Na tabela abaixo é apresentada uma comparação entre as pseudo-observações e as funções de distribuição acumulada para os diferentes kernels.
+
+#+BEGIN_SRC R :exports both :results values :colnames yes :session full_nonpar
+kdeVarX <- data.frame(
+  varX
+ ,pobs = rank( varX ) / ( length( varX ) + 1 )
+ ,epan = snpar::kde( x = varX, kernel='epan', plot=FALSE)$Fhat
+ ,unif = snpar::kde( x = varX, kernel='unif', plot=FALSE)$Fhat
+ ,tria = snpar::kde( x = varX, kernel='tria', plot=FALSE)$Fhat
+ ,quar = snpar::kde( x = varX, kernel='quar', plot=FALSE)$Fhat
+ ,triw = snpar::kde( x = varX, kernel='triw', plot=FALSE)$Fhat
+ ,tric = snpar::kde( x = varX, kernel='tric', plot=FALSE)$Fhat
+ ,gaus = snpar::kde( x = varX, kernel='gaus', plot=FALSE)$Fhat
+ ,cos  = snpar::kde( x = varX, kernel='cos' , plot=FALSE)$Fhat
+)
+colnames(kdeVarX)[1] <- varX.label
+
+kdeVarX[ order(kdeVarX[,1]) , ] %>% round(., casas.decimais)
+#+END_SRC
+
+#+RESULTS:
+|     R |  pobs |  epan |  unif |  tria |  quar |  triw |  tric |  gaus |   cos |
+|-------+-------+-------+-------+-------+-------+-------+-------+-------+-------|
+| 0.034 | 0.029 | 0.248 | 0.271 | 0.237 | 0.234 | 0.224 | 0.237 | 0.292 | 0.246 |
+| 0.057 | 0.057 | 0.249 | 0.271 | 0.238 | 0.235 | 0.225 | 0.238 | 0.292 | 0.246 |
+| 0.066 | 0.086 | 0.249 | 0.271 | 0.238 | 0.235 | 0.225 | 0.238 | 0.292 | 0.247 |
+| 0.125 | 0.114 | 0.251 | 0.272 |  0.24 | 0.237 | 0.227 |  0.24 | 0.293 | 0.248 |
+| 0.315 | 0.143 | 0.256 | 0.276 | 0.246 | 0.243 | 0.234 | 0.245 | 0.296 | 0.253 |
+| 0.342 | 0.171 | 0.257 | 0.276 | 0.247 | 0.244 | 0.235 | 0.246 | 0.297 | 0.254 |
+| 0.525 |   0.2 | 0.261 |  0.28 | 0.253 |  0.25 | 0.242 | 0.252 |   0.3 | 0.259 |
+| 0.528 | 0.229 | 0.261 |  0.28 | 0.253 |  0.25 | 0.242 | 0.252 |   0.3 | 0.259 |
+| 0.684 | 0.257 | 0.266 | 0.283 | 0.258 | 0.255 | 0.247 | 0.257 | 0.302 | 0.264 |
+| 0.935 | 0.286 | 0.272 | 0.287 | 0.266 | 0.263 | 0.256 | 0.264 | 0.306 | 0.271 |
+|  1.08 | 0.314 | 0.276 |  0.29 |  0.27 | 0.268 | 0.262 | 0.269 | 0.308 | 0.275 |
+|   1.4 | 0.343 | 0.285 | 0.296 | 0.281 | 0.278 | 0.273 | 0.279 | 0.313 | 0.283 |
+|   1.7 | 0.371 | 0.293 | 0.302 |  0.29 | 0.288 | 0.284 | 0.288 | 0.318 | 0.292 |
+|  2.24 |   0.4 | 0.307 | 0.313 | 0.308 | 0.305 | 0.304 | 0.305 | 0.326 | 0.307 |
+|     3 | 0.429 | 0.328 | 0.328 | 0.332 |  0.33 | 0.332 | 0.329 | 0.338 | 0.329 |
+|  4.07 | 0.457 | 0.358 | 0.349 | 0.365 | 0.365 | 0.372 | 0.362 | 0.355 | 0.359 |
+|   5.9 | 0.486 | 0.408 | 0.387 |  0.42 | 0.424 | 0.436 |  0.42 | 0.384 | 0.411 |
+|  6.65 | 0.514 | 0.428 | 0.402 | 0.442 | 0.447 | 0.461 | 0.443 | 0.396 | 0.431 |
+|  6.72 | 0.543 |  0.43 | 0.403 | 0.444 | 0.449 | 0.463 | 0.445 | 0.397 | 0.433 |
+|  7.31 | 0.571 | 0.446 | 0.415 | 0.461 | 0.466 | 0.482 | 0.462 | 0.406 | 0.449 |
+| 9.633 |   0.6 | 0.505 | 0.463 | 0.521 |  0.53 | 0.546 | 0.528 | 0.442 |  0.51 |
+|   9.9 | 0.629 | 0.512 | 0.468 | 0.528 | 0.537 | 0.553 | 0.535 | 0.446 | 0.516 |
+|  18.6 | 0.657 | 0.662 | 0.645 | 0.665 | 0.668 | 0.671 | 0.669 | 0.565 | 0.663 |
+|    20 | 0.686 | 0.674 | 0.659 | 0.676 | 0.678 |  0.68 | 0.679 | 0.581 | 0.674 |
+|    27 | 0.714 | 0.709 | 0.704 | 0.711 | 0.713 | 0.715 | 0.712 | 0.647 |  0.71 |
+|    60 | 0.743 | 0.757 | 0.759 | 0.756 | 0.755 | 0.754 | 0.756 |  0.76 | 0.757 |
+|  66.5 | 0.771 | 0.773 |  0.77 | 0.774 | 0.774 | 0.775 | 0.774 | 0.772 | 0.773 |
+|  87.5 |   0.8 | 0.809 | 0.809 | 0.809 | 0.809 | 0.809 | 0.809 | 0.804 | 0.809 |
+|   132 | 0.829 | 0.849 |  0.85 | 0.848 | 0.848 | 0.848 | 0.849 | 0.851 | 0.849 |
+|   135 | 0.857 | 0.857 | 0.855 | 0.858 | 0.858 | 0.858 | 0.857 | 0.855 | 0.857 |
+| 183.6 | 0.886 |  0.91 | 0.911 |  0.91 |  0.91 |  0.91 |  0.91 | 0.911 |  0.91 |
+| 184.8 | 0.914 | 0.913 | 0.913 | 0.914 | 0.914 | 0.914 | 0.914 | 0.912 | 0.913 |
+|   944 | 0.943 | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 |
+|  2880 | 0.971 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 |
+
+Abaixo apresenta-se a distância de Kolmogorov-Smirnoff entre a FDA empírica e a FDA calculada com base nas diferentes funções de kernel, ou seja, $\max | \hat{F}(x) - F_k^*(x) |$, sendo $\hat{F}(x)$ a função distribuição acumulada empírica e $F_k^*(x)$ a função distribuição acumulada obtida a partir da função densidade do kernel $k$, com $k=$ epanechnikov, uniform, quartic, triagular, triweight, gaussian, cosine e tricube. 
+
+#+BEGIN_SRC R :exports results :results values :colnames yes :session full_nonpar
+(varX_KS <- kdeVarX %>%
+   pivot_longer(
+     -c(varX.label,'pobs')
+    ,names_to = 'kernel'
+    ,values_to = 'step'
+   ) %>%
+   mutate(
+     kernel_nome = case_when(
+       kernel == 'triw' ~ 'Triweight'
+      ,kernel == 'quar' ~ 'Quartic'
+      ,kernel == 'tria' ~ 'Triangular'
+      ,kernel == 'tric' ~ 'Tricube'
+      ,kernel == 'cos'  ~ 'Cosine'
+      ,kernel == 'epan' ~ 'Epanechnikov'
+      ,kernel == 'unif' ~ 'Uniform'
+      ,kernel == 'gaus' ~ 'Gaussian'
+      ,TRUE ~ as.character(kernel)
+     )
+    ,KS = round( abs( step - pobs), casas.decimais)
+   ) %>%
+   group_by( kernel_nome, kernel ) %>%
+   summarise(
+     max_distance_KS = max(KS)
+   ) %>%
+   arrange( max_distance_KS ) %>%
+   as.data.frame
+)
+#+END_SRC
+
+#+RESULTS:
+| kernel_nome  | kernel | max_distance_KS |
+|--------------+--------+-----------------|
+| Triweight    | triw   |           0.196 |
+| Quartic      | quar   |           0.206 |
+| Tricube      | tric   |           0.208 |
+| Triangular   | tria   |           0.209 |
+| Cosine       | cos    |           0.217 |
+| Epanechnikov | epan   |            0.22 |
+| Uniform      | unif   |           0.242 |
+| Gaussian     | gaus   |           0.263 |
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      kdeVarX[ order(kdeVarX[,1]) , ]
+     ,digits= c(0, rep( casas.decimais, ncol(kdeVarX) ))
+     ,align="rc|c|c|c|c|c|c|c|c|c|"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/", varX.label,"_CDFKernels_table.tex")
+)
+
+## Exporta tabela de comparação das estatísticas de Kolmogorov-Smirnoff por kernel
+capture.output(
+  print(
+    xtable(
+      varX_KS[,c('kernel_nome','max_distance_KS')]
+     ,digits= c(0, 0, casas.decimais)
+     ,align="c|c|c|"
+    )
+   ,include.colnames=FALSE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/",varX.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+Como se pode notar, a função de kernel src_R[:results raw values :session full_nonpar]{varX_KS[1,'kernel']} responde pela menor distância em relação à função distribuição acumulada empírica. 
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## variáveis globais para gráficos da análise exploratória de dados
+var.dados    <- varX  ; var.label    <- varX.label
+kernel.abrev <- varX_KS[ 1,'kernel']
+kernel.compl <- varX_KS[ 1,'kernel_nome']
+
+## https://rdrr.io/cran/snpar/src/R/kde.R
+kern <- snpar::kde( var.dados, kernel = kernel.abrev, plot=FALSE)
+kern <- cbind( kern$xgrid, kern$fhat, kern$Fhat)
+kern <- kern[ order( kern[,1]), ]
+
+## exporta gráficos para artigo
+ylim_max <- round( digits = 2
+                 ,max(
+                    max(kern[,2]) # maior valor da densidade da função de kernel
+                   ,max( hist( var.dados, plot=FALSE)$density ) # maior valor da densidade do histograma
+                  )
+                  ) * (1 + 0.15)
+
+## Histograma, boxplot e densidades de kernel para varY
+pdf(file = paste0( './img/', var.label, '_histogram.pdf'), width=5, height=5)
+layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(8,1))
+par(mar=c(4, 4.1, 1.1, 2.1))
+hist(
+  var.dados
+ ,prob=TRUE
+ ,n=50
+ ,ylim=c(0, ylim_max )
+ ,xlab=''
+ ,main=''
+ ,ylab='densidade'
+)
+lines(
+  kern[,1]
+ ,kern[,2]
+ ,col='blue'
+ ,lwd=2
+)
+legend(
+  x= quantile( var.dados, probs = 0.90 )
+ ,y= ylim_max / 2
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = c('blue')
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+par(mar=c(0, 4.1, 1.1, 2.1))
+boxplot(
+  var.dados
+ ,horizontal=TRUE
+ ,xaxt="n"
+ ,frame=F
+)
+graphics.off()
+
+## FDA Empírica e FDA aproximada a partir da densidade de kernel
+pdf(file = paste0( './img/', var.label, '_ecdf.pdf'), width=5, height=5)
+plot(
+  ecdf( var.dados )
+ ,main = ''
+ ,xlab = ''
+ ,ylab = 'distribuição acumulada'
+ ,pch=20
+)
+lines(
+  kern[,1]
+ ,kern[,3]
+ ,type='l'
+ ,col='blue'
+ ,lwd=2
+ ,ylim=c(0,1)
+)
+legend(
+  x=10
+ ,y=0.60
+ ,legend = paste('Kernel', kernel.compl)
+ ,col = 'blue'
+ ,lty = c(1)
+ ,lwd = c(2)
+ ,box.lty = 0
+ ,title = ''
+)
+graphics.off()
+#+END_SRC
+
+*** full_nonpar tabela KS transposta                               :noexport:
+
+#+BEGIN_SRC R :exports none :results silent  :session full_nonpar
+## Tabela 1 do paper transposta (Distância de KS para D_max e R
+capture.output(
+  print(
+    xtable(
+      bind_rows( pivot_longer(data = varX_KS[,c(1,3)] %>% rename( '$KS (R)$' = max_distance_KS),cols = -kernel_nome)
+               ,pivot_longer(data = varY_KS[,c(1,3)] %>% rename( '$KS (D_{max})$' = max_distance_KS),cols = -kernel_nome)
+                ) %>%
+      arrange( name, kernel_nome ) %>%
+      pivot_wider(
+        id_cols = 'name', names_from = 'kernel_nome', values_from = 'value'
+      )
+     ,digits= c(0, 0, rep(casas.decimais, times=8))
+     ,align="c|c|c|c|c|c|c|c|c|c|"  
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,hline.after=NULL
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0('./dados/',varX.label,"_",varY.label,"_KolmogorovDistance_table.tex")
+)
+#+END_SRC
+
+*** Comparação gráfica das funções de kernel
+
+#+BEGIN_SRC R :exports results :results results graphics file :file ./img/R_Dmax_kernel_comparison.pdf :width 8 :height 10 :session full_nonpar
+par(mfrow=c(4,3))
+for(i in 1:10){
+  title <- ifelse(
+    i==1
+   ,'escala original'
+   ,ifelse(
+      i==2
+     ,'pseudo-observações'
+     ,paste(
+        'kernel:'
+       ,switch(
+          names(kdeVarX)[i]
+         ,'triw' = 'Triweight'
+         ,'quar' = 'Quartic'
+         ,'tria' = 'Triangular'
+         ,'tric' = 'Tricube'
+         ,'cos'  = 'Cosine'
+         ,'epan' = 'Epanechnikov'
+         ,'unif' = 'Uniform'
+         ,'gaus' = 'Gaussian'
+        )
+      )
+    )
+  )
+  x_lab <- ifelse( i==1, varX.label, paste0('u (',varX.label,')') )
+  y_lab <- ifelse( i==1, varY.label, paste0('v (',varY.label,')'))
+  plot(
+    x=kdeVarX[,i]
+   ,y=kdeVarY[,i]
+   ,main = title
+   ,pch=19
+   ,xlab=x_lab
+   ,ylab=y_lab
+  )
+}
+#+END_SRC
+
+
+
+\pagebreak
+
+
+** Estimação da dependência
+
+*** Marginais em pseudo-observações
+**** Cópula paramétrica (MPLE, pacote 'copula')
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+joe     <- fitCopula(     joeCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+gumbel  <- fitCopula(  gumbelCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+frank   <- fitCopula(   frankCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+normal  <- fitCopula(  normalCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+t       <- fitCopula(       tCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+clayton <- fitCopula( claytonCopula(dim=2), data= as.matrix(data.frame(varX.pobs, varY.pobs)))
+
+##  @loglik   --> log-verossimilhança
+##  @estimate --> theta_hat
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+ajustes <- data.frame(
+  copula     = c("joe","gumbel","frank","normal","clayton","t")
+ ,theta_mple = c(
+      round(joe@estimate,3)
+     ,round(gumbel@estimate,3)
+     ,round(frank@estimate,3)
+     ,round(normal@estimate,3)
+     ,round(clayton@estimate,3)
+     ,paste0( round(t@estimate[1],3), " (df=", round(t@estimate[2],3), ")" )
+  )
+ ,log_pseudolik = round(
+    c(
+      joe@loglik
+     ,gumbel@loglik
+     ,frank@loglik
+     ,normal@loglik
+     ,clayton@loglik
+     ,t@loglik[1])
+   ,3
+  )
+ ,BIC = round(
+    c(
+      joe@loglik - 0.5*length(joe@copula@parameters)*log(length(varX))
+     ,gumbel@loglik - 0.5*length(gumbel@copula@parameters)*log(length(varX))
+     ,frank@loglik - 0.5*length(frank@copula@parameters)*log(length(varX))
+     ,normal@loglik - 0.5*length(normal@copula@parameters)*log(length(varX))
+     ,clayton@loglik - 0.5*length(clayton@copula@parameters)*log(length(varX))
+     ,t@loglik - 0.5*length(t@copula@parameters)*log(length(varX))
+    )
+   ,3
+  )
+)
+semipar_pobs_bestfit <- normal
+(bondade_ajuste <- ajustes[ order( - ajustes$BIC ),] )
+#+END_SRC
+
+#+CAPTION: Bondade do ajuste (por ordem decrescente do BIC)
+#+RESULTS:
+| copula  |          theta_mple | log_pseudolik |   BIC |
+|---------+---------------------+---------------+-------|
+| normal  |               0.744 |        11.603 |  9.84 |
+| gumbel  |               2.055 |         11.57 | 9.807 |
+| frank   |               5.826 |        10.777 | 9.014 |
+| joe     |               2.548 |        10.451 | 8.688 |
+| t       | 0.744 (df=12378.75) |        11.603 | 8.077 |
+| clayton |               1.254 |         7.694 |  5.93 |
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+## destino <- './dados/comparativo_geral_BIC.tex'
+
+cat(
+  paste0(
+    "% ---------------------------------------------------------------------------------------- \n"
+   ## ,"% fonte:     0_Dissertacao/Aplicacoes/Barragens/artigo/full_nonpar/full_nonpar.org \n"
+   ,"\n"
+   ,"% Modelo: ",varY.label," em função de ",varX.label," \n"
+   ,"%   Coeficientes de dependência \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"RhoPearson}{" , signif(cor(varX,varY, method='pearson' ) ,5 ),"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"RhoSpearman}{", signif(cor(varX,varY, method='spearman') ,5 ),"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"TauKendall}{" , signif(cor(varX,varY, method='kendall' ) ,5 ),"} \n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+cat(
+  paste0(
+    "%   Marginais padronizadas pelas pseudo-observações \n"
+   ,"\n"
+   ,"%     Estimação Semi-Paramétrica da cópula \n"
+   ,"%       Máxima Pseudo-Verossimilhança - via função copula::copula \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsFamilia}{" , bondade_ajuste[ 1, 'copula' ],"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsTheta}{" , bondade_ajuste[ 1, 'theta_mple' ],"} \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparPobsBIC}{"  , round(  semipar_pobs_bestfit@loglik - 0.5*length(semipar_pobs_bestfit@copula@parameters) *log(length(varX)), casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+#+END_SRC
+
+**** Cópula Não-paramétrica (Kernel, pacote 'kdecopula')
+	 
+#+BEGIN_SRC R :exports both :results output :session full_nonpar
+## marginais em pseudo-observações
+uv        <- data.frame( varX.pobs, varY.pobs)
+names(uv) <- c( varX.label, varY.label )
+
+## ajuste não-paramétrico por 3 métodos: T, TLL1 e TLL2
+bic.method.T    <- round(
+  BIC( fit.kdecop.T    <- kdecopula::kdecop( uv, method = 'T'    ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL1 <- round(
+  BIC( fit.kdecop.TLL1 <- kdecopula::kdecop( uv, method = 'TLL1' ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL2 <- round(
+  BIC( fit.kdecop.TLL2 <- kdecopula::kdecop( uv, method = 'TLL2' ) ) / (-2)
+ ,digits=casas.decimais
+)
+
+nonpar_pobs_bestfit <- fit.kdecop.T
+summary(nonpar_pobs_bestfit)
+
+## plot(uv, pch=19)
+## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
+## subset( ajustes, copula == 'normal')
+## plot(fit)
+#+END_SRC
+
+#+RESULTS:
+: Kernel copula density estimate (tau = 0.47)
+: ------------------------------
+: Variables:    R -- Dmax 
+: Observations: 34 
+: Method:       Transformation estimator ('T') 
+: Bandwidth:    matrix(c(0.51, 0.36, 0, 0.37), 2, 2)
+: ---
+: logLik: 14.49    AIC: -25.45    cAIC: -25.14    BIC: -22.76 
+: Effective number of parameters: 1.77
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+cat(
+  paste0(
+    "%     Estimação Não-Paramétrica - via função kdecopula::kdecop \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodT}{"  , round( bic.method.T, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodTLLum}{"  , round( bic.method.TLL1, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparPobsBICMethodTLLdois}{"  , round( bic.method.TLL2, casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+## gráficos de superfície
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'T','.pdf'), width=5, height=5)
+plot( fit.kdecop.T, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'TLL1','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL1, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_pobs_surface_method_', 'TLL2','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL2, xlab = 'u', ylab = 'v'  )
+graphics.off()
+#+END_SRC
+
+\pagebreak
+
+
+*** Marginais em funções de kernel
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+varX.kern <- kdeVarX[ , varX_KS[ 1, 'kernel' ] ]
+varY.kern <- kdeVarY[ , varY_KS[ 1, 'kernel' ] ]
+#+END_SRC
+
+**** Cópula paramétrica (MPLE, pacote 'copula')
+
+#+BEGIN_SRC R :exports code :results silent :session full_nonpar
+joe     <- fitCopula(     joeCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+gumbel  <- fitCopula(  gumbelCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+frank   <- fitCopula(   frankCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+normal  <- fitCopula(  normalCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+t       <- fitCopula(       tCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+clayton <- fitCopula( claytonCopula(dim=2), data= as.matrix(data.frame(varX.kern, varY.kern)))
+
+##  @loglik   --> log-verossimilhança
+##  @estimate --> theta_hat
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+ajustes <- data.frame(
+  copula     = c("joe","gumbel","frank","normal","clayton","t")
+ ,theta_mple = c(
+      round(joe@estimate,3)
+     ,round(gumbel@estimate,3)
+     ,round(frank@estimate,3)
+     ,round(normal@estimate,3)
+     ,round(clayton@estimate,3)
+     ,paste0( round(t@estimate[1],3), " (df=", round(t@estimate[2],3), ")" )
+  )
+ ,log_pseudolik = round(
+    c(
+      joe@loglik
+     ,gumbel@loglik
+     ,frank@loglik
+     ,normal@loglik
+     ,clayton@loglik
+     ,t@loglik[1])
+   ,3
+  )
+ ,BIC = round(
+    c(
+      joe@loglik - 0.5*length(joe@copula@parameters)*log(length(varX))
+     ,gumbel@loglik - 0.5*length(gumbel@copula@parameters)*log(length(varX))
+     ,frank@loglik - 0.5*length(frank@copula@parameters)*log(length(varX))
+     ,normal@loglik - 0.5*length(normal@copula@parameters)*log(length(varX))
+     ,clayton@loglik - 0.5*length(clayton@copula@parameters)*log(length(varX))
+     ,t@loglik - 0.5*length(t@copula@parameters)*log(length(varX))
+    )
+   ,3
+  )
+)
+semipar_kern_bestfit <- clayton
+(bondade_ajuste <- ajustes[ order( - ajustes$BIC ),] )
+#+END_SRC
+
+#+CAPTION: Bondade do ajuste (por ordem decrescente do BIC)
+#+RESULTS:
+| copula  |       theta_mple | log_pseudolik |    BIC |
+|---------+------------------+---------------+--------|
+| clayton |            2.386 |        12.266 | 10.503 |
+| normal  |            0.752 |        10.834 |  9.071 |
+| gumbel  |            1.993 |        10.231 |  8.468 |
+| t       | 0.714 (df=2.087) |        11.951 |  8.425 |
+| frank   |            5.711 |         9.176 |  7.413 |
+| joe     |            2.177 |         8.547 |  6.784 |
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+
+cat(
+  paste0(
+    "%   Marginais padronizadas pelas densidades de Kernel \n"
+   ,"\n"
+   ,"%     Kernel mais adequado (segundo Distância de Kolmogorov-Smirnoff) por variável \n"
+   ,"\\newcommand{\\",varY.label,"VdoisKernelNome}{", varY_KS[ 1, 'kernel'] ,"} \n"
+   ,"\\newcommand{\\",varY.label,"VdoisKernelKS}{"  , round( varY_KS[ 1, 'max_distance_KS'], casas.decimais) ,"} \n"
+   ,"\\newcommand{\\",varX.label,"KernelNome}{", varX_KS[ 1, 'kernel'] ,"} \n"
+   ,"\\newcommand{\\",varX.label,"KernelKS}{"  , round( varX_KS[ 1, 'max_distance_KS'], casas.decimais) ,"} \n"
+   ,"\n"
+   ,"%     Estimação Semi-Paramétrica da cópula \n"
+   ,"%       Máxima Pseudo-Verossimilhança - via função copula::copula \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernFamilia}{" , bondade_ajuste[ 1, 'copula' ],"} \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernTheta}{" , bondade_ajuste[ 1, 'theta_mple' ],"} \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"SemiparKernBIC}{"  , round(  semipar_kern_bestfit@loglik - 0.5*length(semipar_kern_bestfit@copula@parameters) *log(length(varX)), casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+#+END_SRC
+
+**** Cópula Não-paramétrica (Kernel, pacote 'kdecopula')
+
+#+BEGIN_SRC R :exports both :results output :session full_nonpar
+## marginais em kernel
+uv        <- data.frame( varX.kern, varY.kern )
+names(uv) <- c( varX.label, varY.label )
+
+## ajuste não-paramétrico por 3 métodos: T, TLL1 e TLL2
+bic.method.T    <- round(
+  BIC( fit.kdecop.T    <- kdecopula::kdecop( uv, method = 'T'    ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL1 <- round(
+  BIC( fit.kdecop.TLL1 <- kdecopula::kdecop( uv, method = 'TLL1' ) ) / (-2)
+ ,digits=casas.decimais
+)
+bic.method.TLL2 <- round(
+  BIC( fit.kdecop.TLL2 <- kdecopula::kdecop( uv, method = 'TLL2' ) ) / (-2)
+ ,digits=casas.decimais
+)
+
+nonpar_kern_bestfit <- fit.kdecop.T
+summary(nonpar_kern_bestfit)
+
+## plot(uv, pch=19)
+## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
+## subset( ajustes, copula == 'normal')
+## plot(fit)
+#+END_SRC
+
+#+RESULTS:
+: Kernel copula density estimate (tau = 0.48)
+: ------------------------------
+: Variables:    R -- Dmax 
+: Observations: 34 
+: Method:       Transformation estimator ('T') 
+: Bandwidth:    matrix(c(0.46, 0.34, 0, 0.37), 2, 2)
+: ---
+: logLik: 15.1    AIC: -26.8    cAIC: -26.51    BIC: -24.2 
+: Effective number of parameters: 1.7
+
+\pagebreak
+
+**** Exporta Variáveis LaTeX                                       :noexport:
+
+Exportação das variáveis do LaTeX para a dissertação.
+#+BEGIN_SRC R :exports none :results none  :session full_nonpar
+cat(
+  paste0(
+    "%     Estimação Não-Paramétrica - via função kdecopula::kdecop \n"
+   ,"%       Bondade de ajuste - Bayesian Information Criterion (BIC) \n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodT}{"     , round( bic.method.T   , casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodTLLum}{"  , round( bic.method.TLL1, casas.decimais),"}\n"
+   ,"\\newcommand{\\",varY.label,varX.label,"NonparKernBICMethodTLLdois}{"  , round( bic.method.TLL2, casas.decimais),"}\n"
+   ,"\n"
+  )
+ ,file = destino
+ ,append = TRUE
+)
+
+## gráficos de superfície
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'T','.pdf'), width=5, height=5)
+plot( fit.kdecop.T, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'TLL1','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL1, xlab = 'u', ylab = 'v'  )
+graphics.off()
+
+pdf( file = paste0('./img/', varX.label, '_', varY.label, '_kdecop_kern_surface_method_', 'TLL2','.pdf'), width=5, height=5)
+plot( fit.kdecop.TLL2, xlab = 'u', ylab = 'v'  )
+graphics.off()
+#+END_SRC
+
+
+** $Prob( V > v | U \in (a,b] )$
+
+$$Prob( V > v | U \in (a,b] ) = 1 - \frac{C(b,x)}{b-a} + \frac{C(a,x)}{b-a}   $$
+
+Probabilidade condicional $Prob( V > v | U \in (a,b] )$, utilizando a cópula paramétrica (estimação do parâmetro de associação via máxima pseudo-verossimilhança) calculada com base nas marginais reescaladas pelas pseudo-observações (ref. aos postos das observações originais).
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Cálculo da Probabilidade Condicional Prob( V > v | U \in (a,b] )
+##
+## Estimação semi-paramétrica
+##   marginais corrigidas pelas pseudo-observações
+##   e cópula paramétrica estimada via MPLE
+##
+## Análise para (1) Dmax ~ R and (2) Dmax ~ Rf
+prob_Vgtv_given_UinInterval_semipar <- function( v, a, b, theta, family ) {
+    ## Expression for P( V>v | U \in (a,b], \theta )
+    if ( v<0 || v>1 ) stop('v outside domain [0,1].          ')
+    if ( a<0 || a>1 ) stop('a in (a,b] outside domain [0,1]. ')
+    if ( b<0 || b>1 ) stop('b in (a,b] outside domain [0,1]. ')
+    if ( a>b )        stop('a greater then b in (a,b]        ')
+    aux_b    <- pCopula( c(b,v), family( param=theta, dim=2) ) / ( b - a )
+    aux_a    <- pCopula( c(a,v), family( param=theta, dim=2) ) / ( b - a )
+    result   <- 1 - ( (aux_b) - (aux_a) )
+    return( round( result, digits = casas.decimais ) )
+}
+## check: prob_Vgtv_given_UinInterval_semipar( v=0.9, a=0.75, b=1, theta=3, family = gumbelCopula )
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+## ========================================================================================================
+## Analysis (1) Dmax ~ R and (2) Dmax ~ Rf 
+##   Row    U: {(0,0.25] (0.25,0.50] (0.50,0.75] (0.75,1.00] }
+##   Column V: {.7 .75 .8 .85 .9 .95}
+##   Formula : P( V>v | U \in (a,b], \theta )
+## varying for \theta (Uninf prior or sgamma/trbeta) and copula family (Gumbel and Gaussian)
+
+ranks     <- seq( from=0.7, to=0.95, by=0.05)
+intervals <- data.frame(
+    a = c( 0   , 0.25, 0.50, 0.75 )
+   ,b = c( 0.25, 0.50, 0.75, 1.00 )
+    )
+
+## https://tidyr.tidyverse.org/reference/expand_grid.html
+## Lay all possible combinations of ranks and intervals
+cross.ranks.intervals <- expand_grid( intervals, ranks)
+
+## Calculate P(V>v | U \in (a,b], \theta)
+##  1. for all combinations of ranks and intervals
+##  2. types of priors (uninformative, shifted gamma and transformed beta)
+##  3. copula famillies (gumbel and normal)
+##  4. models (Dmax ~ R and Dmax ~ Rf)
+cond_prob_semipar <- cbind(
+  cross.ranks.intervals
+ ,prob_Vgtv_given_U = apply(
+    cross.ranks.intervals
+   ,MARGIN = 1
+   ,FUN = function(x) prob_Vgtv_given_UinInterval_semipar(
+                        v = x[3]
+                       ,a = x[1]
+                       ,b = x[2]
+                       ,theta = semipar_pobs_bestfit@estimate
+                       ,family = normalCopula
+                      )
+  )
+)
+cond_prob_semipar$estimation <- 'semipar_pobs'
+cond_prob_semipar[, paste0( varX.label,'_a') ] <- 0
+cond_prob_semipar[, paste0( varX.label,'_b') ] <- 0
+cond_prob_semipar[, varY.label ] <- 0
+
+## subset para retornar à escala original
+tmp1 <- data.frame(
+  kdeVarX[ , varX.label ] # R_f na escala original
+ ,kdeVarY[ , varY.label ] # D_max na escala original
+ ,kdeVarX[ , 'pobs'     ] # R_f   reescalado para [0,1] usando pseudo-observações
+ ,kdeVarY[ , 'pobs'     ] # D_max reescalado para [0,1] usando pseudo-observações
+)
+names(tmp1) <- c( varX.label, varY.label, 'U_orig_pobs', 'V_orig_pobs')
+
+for (i in 1:nrow(cond_prob_semipar)) {
+  ## escala original
+  ##  Rf_a e Rf_b
+  cond_prob_semipar[i, paste0( varX.label,'_a')] <- tmp1[ which.min( abs( cond_prob_semipar[i,'a'] - tmp1[, 'U_orig_pobs']) ), varX.label ]
+  cond_prob_semipar[i, paste0( varX.label,'_b')] <- tmp1[ which.min( abs( cond_prob_semipar[i,'b'] - tmp1[, 'U_orig_pobs']) ), varX.label ]
+  ##  D_max  
+  cond_prob_semipar[i,varY.label] <- tmp1[ which.min( abs( tmp1[, 'V_orig_pobs'] - cond_prob_semipar[i,'ranks'] ) ) , varY.label] 
+} 
+cond_prob_semipar
+#+END_SRC
+
+#+RESULTS:
+|    a |    b | ranks | prob_Vgtv_given_U | estimation   |    R_a |   R_b | Dmax |
+|------+------+-------+-------------------+--------------+--------+-------+------|
+|    0 | 0.25 |   0.7 |             0.023 | semipar_pobs | 0.0342 | 0.684 |   12 |
+|    0 | 0.25 |  0.75 |             0.014 | semipar_pobs | 0.0342 | 0.684 |   12 |
+|    0 | 0.25 |   0.8 |             0.007 | semipar_pobs | 0.0342 | 0.684 |   25 |
+|    0 | 0.25 |  0.85 |             0.003 | semipar_pobs | 0.0342 | 0.684 |   45 |
+|    0 | 0.25 |   0.9 |             0.001 | semipar_pobs | 0.0342 | 0.684 |   80 |
+|    0 | 0.25 |  0.95 |                 0 | semipar_pobs | 0.0342 | 0.684 |  120 |
+| 0.25 |  0.5 |   0.7 |             0.131 | semipar_pobs |  0.684 |  6.65 |   12 |
+| 0.25 |  0.5 |  0.75 |              0.09 | semipar_pobs |  0.684 |  6.65 |   12 |
+| 0.25 |  0.5 |   0.8 |             0.057 | semipar_pobs |  0.684 |  6.65 |   25 |
+| 0.25 |  0.5 |  0.85 |             0.031 | semipar_pobs |  0.684 |  6.65 |   45 |
+| 0.25 |  0.5 |   0.9 |             0.013 | semipar_pobs |  0.684 |  6.65 |   80 |
+| 0.25 |  0.5 |  0.95 |             0.003 | semipar_pobs |  0.684 |  6.65 |  120 |
+|  0.5 | 0.75 |   0.7 |              0.34 | semipar_pobs |   6.65 |    60 |   12 |
+|  0.5 | 0.75 |  0.75 |             0.263 | semipar_pobs |   6.65 |    60 |   12 |
+|  0.5 | 0.75 |   0.8 |              0.19 | semipar_pobs |   6.65 |    60 |   25 |
+|  0.5 | 0.75 |  0.85 |             0.122 | semipar_pobs |   6.65 |    60 |   45 |
+|  0.5 | 0.75 |   0.9 |             0.064 | semipar_pobs |   6.65 |    60 |   80 |
+|  0.5 | 0.75 |  0.95 |              0.02 | semipar_pobs |   6.65 |    60 |  120 |
+| 0.75 |    1 |   0.7 |             0.706 | semipar_pobs |     60 |  2880 |   12 |
+| 0.75 |    1 |  0.75 |             0.633 | semipar_pobs |     60 |  2880 |   12 |
+| 0.75 |    1 |   0.8 |             0.546 | semipar_pobs |     60 |  2880 |   25 |
+| 0.75 |    1 |  0.85 |             0.443 | semipar_pobs |     60 |  2880 |   45 |
+| 0.75 |    1 |   0.9 |             0.322 | semipar_pobs |     60 |  2880 |   80 |
+| 0.75 |    1 |  0.95 |             0.177 | semipar_pobs |     60 |  2880 |  120 |
+
+Probabilidade condicional $Prob( V > v | U \in (a,b] )$, utilizando a cópula não-paramétrica (estimação do parâmetro de associação via funções de kernel) calculada com base nas marginais reescaladas pelas funções de distribuição acumuladas provenientes da estimação das funções densidade de probabilidade obtidas via funções de kernel.
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+## Estimação não-paramétrica completa
+##   marginais corrigidas pelas FDA baseadas na fdp de kernel
+##   e cópula não-paramétrica estimada via pacote kdecopula
+##
+prob_Vgtv_given_UinInterval_nonpar <- function( v, a, b, nonpar_copula ) {
+    ## Expression for P( V>v | U \in (a,b], \theta )
+    if ( v<0 || v>1 ) stop('v outside domain [0,1].          ')
+    if ( a<0 || a>1 ) stop('a in (a,b] outside domain [0,1]. ')
+    if ( b<0 || b>1 ) stop('b in (a,b] outside domain [0,1]. ')
+    if ( a>b )        stop('a greater then b in (a,b]        ')
+    aux_b    <- pkdecop( c(b,v), nonpar_copula ) / ( b - a )
+    aux_a    <- pkdecop( c(a,v), nonpar_copula ) / ( b - a )
+    result   <- 1 - ( (aux_b) - (aux_a) )
+    return( round( result, digits = casas.decimais) )
+}
+## check: prob_Vgtv_given_UinInterval_nonpar( v=0.9, a=0.75, b=1, nonpar_copula = fit.kdecop.T )
+#+END_SRC
+
+#+BEGIN_SRC R :exports results :results table :colnames yes  :session full_nonpar
+## Calculate P(V>v | U \in (a,b], \theta)
+##  1. for all combinations of ranks and intervals
+##  2. types of priors (uninformative, shifted gamma and transformed beta)
+##  3. copula famillies (gumbel and normal)
+##  4. models (Dmax ~ R and Dmax ~ Rf)
+cond_prob_nonpar <- cbind(
+  cross.ranks.intervals
+ ,prob_Vgtv_given_U = apply(
+    cross.ranks.intervals
+   ,MARGIN = 1
+   ,FUN = function(x) prob_Vgtv_given_UinInterval_nonpar(
+                        v = x[3]
+                       ,a = x[1]
+                       ,b = x[2]
+                       ,nonpar_copula = nonpar_kern_bestfit
+                      )
+  )
+)
+cond_prob_nonpar$estimation <- 'nonpar_kern'
+cond_prob_nonpar[, paste0( varX.label,'_a') ] <- 0
+cond_prob_nonpar[, paste0( varX.label,'_b') ] <- 0
+cond_prob_nonpar[, varY.label ] <- 0
+
+## subset para retornar à escala original
+tmp1 <- data.frame(
+  kdeVarX[ , varX.label ] # R_f na escala original
+ ,kdeVarY[ , varY.label ] # D_max na escala original
+ ,kdeVarX[ , varX_KS[1, 'kernel'] ] # R_f   reescalado para [0,1] usando função de kernel
+ ,kdeVarY[ , varY_KS[1, 'kernel'] ] # D_max reescalado para [0,1] usando função de kernel
+)
+names(tmp1) <- c( varX.label, varY.label, 'U_orig_kern', 'V_orig_kern')
+
+for (i in 1:nrow(cond_prob_nonpar)) {
+  ## escala original
+  ##  Rf_a e Rf_b
+  cond_prob_nonpar[i, paste0( varX.label,'_a')] <- tmp1[ which.min( abs( cond_prob_nonpar[i,'a'] - tmp1[, 'U_orig_kern']) ), varX.label ]
+  cond_prob_nonpar[i, paste0( varX.label,'_b')] <- tmp1[ which.min( abs( cond_prob_nonpar[i,'b'] - tmp1[, 'U_orig_kern']) ), varX.label ]
+  ##  D_max  
+  cond_prob_nonpar[i, varY.label] <- tmp1[ which.min( abs( tmp1[, 'V_orig_kern'] - cond_prob_nonpar[i,'ranks'] ) ) , varY.label] 
+} 
+cond_prob_nonpar
+#+END_SRC
+
+#+RESULTS:
+|    a |    b | ranks | prob_Vgtv_given_U | estimation  |    R_a |   R_b | Dmax |
+|------+------+-------+-------------------+-------------+--------+-------+------|
+|    0 | 0.25 |   0.7 |             0.057 | nonpar_kern | 0.0342 | 0.684 |   12 |
+|    0 | 0.25 |  0.75 |             0.046 | nonpar_kern | 0.0342 | 0.684 |   12 |
+|    0 | 0.25 |   0.8 |             0.037 | nonpar_kern | 0.0342 | 0.684 |   25 |
+|    0 | 0.25 |  0.85 |              0.03 | nonpar_kern | 0.0342 | 0.684 |   41 |
+|    0 | 0.25 |   0.9 |             0.023 | nonpar_kern | 0.0342 | 0.684 |   80 |
+|    0 | 0.25 |  0.95 |             0.019 | nonpar_kern | 0.0342 | 0.684 |  120 |
+| 0.25 |  0.5 |   0.7 |             0.202 | nonpar_kern |  0.684 |  7.31 |   12 |
+| 0.25 |  0.5 |  0.75 |             0.152 | nonpar_kern |  0.684 |  7.31 |   12 |
+| 0.25 |  0.5 |   0.8 |             0.107 | nonpar_kern |  0.684 |  7.31 |   25 |
+| 0.25 |  0.5 |  0.85 |             0.069 | nonpar_kern |  0.684 |  7.31 |   41 |
+| 0.25 |  0.5 |   0.9 |             0.038 | nonpar_kern |  0.684 |  7.31 |   80 |
+| 0.25 |  0.5 |  0.95 |             0.012 | nonpar_kern |  0.684 |  7.31 |  120 |
+|  0.5 | 0.75 |   0.7 |             0.346 | nonpar_kern |   7.31 |    60 |   12 |
+|  0.5 | 0.75 |  0.75 |             0.277 | nonpar_kern |   7.31 |    60 |   12 |
+|  0.5 | 0.75 |   0.8 |             0.208 | nonpar_kern |   7.31 |    60 |   25 |
+|  0.5 | 0.75 |  0.85 |             0.139 | nonpar_kern |   7.31 |    60 |   41 |
+|  0.5 | 0.75 |   0.9 |             0.075 | nonpar_kern |   7.31 |    60 |   80 |
+|  0.5 | 0.75 |  0.95 |             0.024 | nonpar_kern |   7.31 |    60 |  120 |
+| 0.75 |    1 |   0.7 |             0.601 | nonpar_kern |     60 |  2880 |   12 |
+| 0.75 |    1 |  0.75 |             0.531 | nonpar_kern |     60 |  2880 |   12 |
+| 0.75 |    1 |   0.8 |             0.454 | nonpar_kern |     60 |  2880 |   25 |
+| 0.75 |    1 |  0.85 |             0.368 | nonpar_kern |     60 |  2880 |   41 |
+| 0.75 |    1 |   0.9 |             0.269 | nonpar_kern |     60 |  2880 |   80 |
+| 0.75 |    1 |  0.95 |             0.151 | nonpar_kern |     60 |  2880 |  120 |
+
+#+BEGIN_SRC R :exports code :results silent  :session full_nonpar
+
+## Comparação da probabilidade condicional usando marginais
+##   em escala [0,1]
+##
+##
+cond_prob_compara_Dmax_Rf <- cond_prob_compara
+
+cond_prob_compara_Dmax_R <- bind_rows(
+  ## estimação semiparamétrica usando pseudo-observações
+  cond_prob_semipar %>%
+  rename( limiar = ranks) %>%
+  mutate(
+    intervalo = paste0('(',a,', ',b,']')
+   ,modelo = paste0('02_',varY.label,'_',varX.label)
+   ,marginais = '03_pobs'
+  ) %>%
+  select( intervalo, limiar, modelo, marginais, prob_Vgtv_given_U)
+ ,
+  ## estimação não-parametrica usando marginais corrigidas pelo kernel
+  cond_prob_nonpar %>%
+  rename( limiar = ranks) %>%
+  mutate(
+    intervalo = paste0('(',a,', ',b,']')
+   ,modelo = paste0('02_',varY.label,'_',varX.label)
+   ,marginais = '04_kernel'
+  ) %>%
+  select( intervalo, limiar, modelo, marginais, prob_Vgtv_given_U)
+)
+
+## consolida resultados dos modelos Dmax_Rf e Dmax_R
+cond_prob_compara <- bind_rows(
+  cond_prob_compara_Dmax_Rf
+ ,cond_prob_compara_Dmax_R
+)
+
+## Resultados para o paper/livro
+cond_prob_compara_resultados <- cond_prob_compara %>%
+  rename(
+    prob_cond = prob_Vgtv_given_U
+  ) %>%
+  pivot_wider(
+    id_cols = c('intervalo','limiar')
+    ,names_from = c('modelo','marginais')
+    ,values_from = prob_cond
+  ) %>%
+  as.data.frame
+
+for(i in 2:nrow(cond_prob_compara_resultados)){
+  cond_prob_compara_resultados[i, 'intervalo'] <- ifelse( cond_prob_compara_resultados[i, 'limiar'] == 0.70, cond_prob_compara_resultados[i, 'intervalo'], '')
+}
+
+## exporta resultados da comparação entre semipar e nonpar
+cond_prob_compara_resultados %>%
+  xtable( digits= casas.decimais ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = FALSE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_prob_compara_formato_longo.tex'
+  )
+  
+
+## Probabilidade condicional usando marginais
+##   em escala original e estimação não-paramétrica completa
+##
+##
+cond_prob_escala_original_Dmax_R <- cond_prob_nonpar %>%
+  rename(
+    prob_cond = prob_Vgtv_given_U
+    ,limiar = Dmax
+  ) %>%
+  mutate(
+    intervalo = paste0('(', R_a,', ',R_b,']')
+   ,intervalo = ifelse( ranks == 0.70, intervalo, '')
+  ) %>%
+  select( intervalo, limiar, prob_cond )
+
+## exporta resultados da comparação entre semipar e nonpar
+cond_prob_escala_original_Dmax_R %>%
+  xtable( digits= c(0,0,1,casas.decimais) ) %>%
+  print(
+    only.contents = FALSE
+   ,include.colnames = TRUE
+   ,include.rownames = FALSE
+   ,hline.after = NULL
+   ,comment=FALSE
+  ) %>%
+  cat(
+    file = './dados/cond_prob_escala_original_Dmax_R_formato_longo.tex'
+  )
+#+END_SRC
+
+
+\pagebreak
+
+
+
+
+
+* Referências
+#+LaTeX: \renewcommand*{\refname}{}
+\bibliography{./refs}
