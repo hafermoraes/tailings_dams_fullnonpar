@@ -161,7 +161,7 @@ function(x, h, xgrid, ngrid, kernel = c("epan", "unif","tria","quar",
 *** Dados originais (dams)                                         :noexport:
 	#+NAME: dams
 	#+ATTR_LATEX: :environment longtable :align c|c|c|c|c|c|c|c|p{2.2cm}|c
- | No | Year |    H |    VT | Dmax |     VF | Failure Type | Source  | Mine Full Name                                                  | Mine                             |
+ | No | Year |    H |    VT | Dmax |     VF | Failure Type | Source  | MineFullName                                                  | Mine                             |
  |----+------+------+-------+------+--------+--------------+---------+-----------------------------------------------------------------+----------------------------------|
  |  1 | 1973 |   43 |   0.5 |   25 |   0.17 | SI           | Rico    | (unidentified), Southwestern USA                                |                                  |
  |  2 | 2000 |   15 |    15 |  5.2 |    1.8 | ER           | CB      | Aitik mine, Sweden (Boliden Ltd.)                               |                                  |
@@ -206,14 +206,38 @@ function(x, h, xgrid, ngrid, kernel = c("epan", "unif","tria","quar",
 names <- dt[ , c("No", "Mine") ]
 
 ## data.frame base para análises (ainda contém NAs !)
-dt    <- dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "Mine") ]
+dt    <- dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "MineFullName") ]
 
 ## Novas variáveis
 dt$R <- dt$H * dt$VF
 dt$Rf <- round( dt$H * ( dt$VF/dt$VT) * dt$VF, 2)
 
 ## data.frame base para análises (ainda contém NAs !)
-dt    <- dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "R", "Rf", "Mine") ]
+dt    <- dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "R", "Rf", "MineFullName") ]
+#+END_SRC
+
+#+BEGIN_SRC R :exports none :results silent :var dt=dams :session full_nonpar
+
+## data.frame base para análises (ainda contém NAs !)
+## Exporta tabela de comparação de FDA baseadas nas funções de kernel
+capture.output(
+  print(
+    xtable(
+      dt[ , c("No", "Year", "H", "VT", "Dmax", "VF", "MineFullName") ]
+     ,digits= c(0,0,0,1,3,2,4,0)
+     ,align="lc|c|c|c|c|c|p{3cm}"
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=FALSE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/dams_data.tex")
+)
+
+
+
 #+END_SRC
 
 ** Seleção de variáveis para modelagem externa ao artigo
@@ -1161,10 +1185,11 @@ nonpar_kern_bestfit <- fit.kdecop.T
 summary(nonpar_kern_bestfit)
 
 ## plot(uv, pch=19)
-## summary( fit <- kdecopula::kdecop( uv, method = 'TLL2' ) )
+## summary( fit <- kdecopula::kdecop( uv, method = 'T' ) )
 ## paste( 'BIC_equiv_copula =', round( BIC(fit)/(-2) ,2) )
-## subset( ajustes, copula == 'normal')
-## plot(fit)
+## plot(fit, type='contour', margins='unif')
+## abline( v = 0.8618, col='red', lty=2)
+## plot(fit, type='surface')
 #+END_SRC
 
 #+RESULTS:
@@ -1177,6 +1202,173 @@ summary(nonpar_kern_bestfit)
 : ---
 : logLik: 31.21    AIC: -60.62    cAIC: -60.5    BIC: -59.36 
 : Effective number of parameters: 0.9
+
+
+A seguir é apresentado um estudo para cálculo do valor exato de $E(V_F | V_T \in (a,b] )$. O estudo utiliza simulação de pares ordenados gerados a partir da cópula não-paramétrica ajustada aos dados e amostragem por rejeição, de modo a somente considerar para a estimativa de $\widehat{V}$ aqueles pares para os quais $\widehat{U} \in ( U_{\texttt{ForqIII}}-\epsilon;U_{\texttt{ForqIII}}+\epsilon)$ para uma precisão dada por $\epsilon$.
+#+BEGIN_SRC R :exports none :results silent :session full_nonpar
+## Barragens em nível de emergência 3 em 07.02.2021
+##   Fonte: https://app.anm.gov.br/SIGBM/Publico/ClassificacaoNacionalDaBarragem
+##     Filtro: [Nível de Emergência] == 'Nível 3'
+anm_nivel_3 <- data.frame(
+  barragem = c('SulSuperior', 'ForquilhaIII',  'B3B4')
+ ,H_m      = c(           85,             77,      55)
+ ,VT_m3    = c(      6016849,       19476113, 2685782)/1e6
+ ,U        = 0 # U equivalente ao VT das barragens em nível 3 
+ ,amostras = 0 # qtde de amostras aceitas via simulação
+ ,mean_U   = 0 # média de U nas amostras aceitas
+ ,mean_V   = 0 # média de V nas amostras aceitas
+ ,sd_V     = 0 # d.p. de V nas amostras aceitas
+ ,VF_hat   = 0 # VF equivalente ao mean_V obtido via amostragem por rejeição
+ ,stringsAsFactors = FALSE
+)
+
+## U equivalente ao VT das barragens em nível 3 
+for(i in 1:3) {
+  anm_nivel_3[ i, 'U'] <- kdeVarX[
+    which.min(
+      abs(
+        anm_nivel_3[ i, 'VT_m3'] - kdeVarX[ , varX.label]
+      )
+    )
+   ,kernel.abrev  # kernel com melhor ajuste à marginal varX
+  ]
+}
+
+## Simulação dos valores para barragens nível 3
+N_PARES <- 1e6   # número de pares (u,v) a serem gerados
+EPSILON <- 1e-3  # precisão para amostragem por rejeição
+
+time_begin <- Sys.time()
+sim_kdecop <- stats::simulate( # simulação da cópula não-paramétrica
+                       object = nonpar_kern_bestfit
+                      ,nsim = N_PARES
+                      ,seed = 12345  # para reproducibilidade das simulações 
+                     ) %>% 
+  as.data.frame %>%
+  rename( u = V1, v = V2 )
+time_end <- Sys.time()
+
+sim_time <- difftime(
+  time1 = time_end
+ ,time2 = time_begin
+ ,units = 'min'
+)
+
+for(i in 1:nrow(anm_nivel_3)){
+  ## Gráfico da Amostragem por rejeição
+  pdf(
+    file = paste0('./img/',anm_nivel_3[i,'barragem'],'_rejection_sampling.pdf')
+   ,width = 5
+   ,height = 5
+  )
+  set.seed(12345) # reproducibilidade da função 'sample' a seguir
+  plot(
+    sim_kdecop[ sample(1:N_PARES, size=1e3),]
+   ,col='grey'
+   ,main = paste(varY.label, 'versus',varX.label)
+  )
+  points( uv, pch=19, col='red') # barragens que quebraram
+  abline( v = anm_nivel_3[i,'U'], col='red', lty=2) # barragem em nível 3 de emergência
+  graphics.off()
+  ## Amostragem por Rejeição
+  rejection_sampling <- sim_kdecop %>% 
+    filter(
+      abs( u - anm_nivel_3[i,'U'] ) <= EPSILON # u^ in (u' - e, u' + e)
+    ) %>%
+    summarise(
+      amostras_aceitas = n()
+     ,u_mean = mean(u)
+     ,v_mean = mean(v)
+     ,v_sd   = sd(v)
+    )
+  anm_nivel_3[ i, 'amostras'] <- rejection_sampling[ 1, 'amostras_aceitas' ]
+  anm_nivel_3[ i, 'mean_U'  ] <- rejection_sampling[ 1, 'u_mean'           ]
+  anm_nivel_3[ i, 'mean_V'  ] <- rejection_sampling[ 1, 'v_mean'           ]
+  anm_nivel_3[ i, 'sd_V'    ] <- rejection_sampling[ 1, 'v_sd'             ]
+  ## Retorno à escala original de VF a partir de V obtido por amostragem por rejeição
+  anm_nivel_3[ i, 'VF_hat'] <- kdeVarY[
+    which.min(
+      abs(
+        anm_nivel_3[ i, 'mean_V'] - kdeVarY[ , kernel.abrev]
+      )
+    )
+   ,varY.label  
+  ]
+  ## diagnósticos gráficos da amostragem por rejeição
+  accepted_samples <- sim_kdecop %>% 
+    filter(
+      abs( u - anm_nivel_3[i,'U'] ) <= EPSILON # u^ in (u' - e, u' + e)
+    )
+  sub.label <- paste0('Nota: ',nrow(accepted_samples), ' de ', N_PARES/1e6,' milhão de amostras aceitas (precisão=', EPSILON,')') 
+  ## histograma U
+  pdf(
+    file = paste0('./img/',anm_nivel_3[i,'barragem'],'_rejection_sampling_hist_u.pdf')
+   ,width = 5
+   ,height = 5
+  )
+  hist(
+    accepted_samples[,'u']
+   ,xlab = 'u*'
+   ,ylab = 'densidade'
+   ,main = ''
+   ,sub  = sub.label
+   ,prob = TRUE
+  )
+  abline( v=mean(accepted_samples[,'u']), lty=2, col='red')
+  graphics.off()
+  ## histograma V
+  pdf(
+    file = paste0('./img/',anm_nivel_3[i,'barragem'],'_rejection_sampling_hist_v.pdf')
+   ,width = 5
+   ,height = 5
+  )
+  hist(
+    accepted_samples[,'v']
+   ,xlab = 'v*'
+   ,ylab = 'densidade'
+   ,main = ''
+   ,prob = TRUE
+   ,sub  = sub.label
+  )
+  abline( v=mean(accepted_samples[,'v']), lty=2, col='red')
+  graphics.off()
+  ## boxplot V
+  pdf(
+    file = paste0('./img/',anm_nivel_3[i,'barragem'],'_rejection_sampling_boxplot_v.pdf')
+   ,width = 5
+   ,height = 5
+  )
+  boxplot(
+    accepted_samples[,'v']
+   ,xlab = 'v*'
+   ,horizontal = TRUE
+   ,frame = FALSE
+   ,sub  = sub.label
+  )
+  abline( v=mean(accepted_samples[,'v']), lty=2, col='red')
+  graphics.off()  
+}
+
+capture.output(
+  print(
+    xtable(
+      anm_nivel_3
+     ,digits = 3
+    )
+   ,include.colnames=TRUE
+   ,sanitize.text.function= function(x){x}
+   ,include.rownames=FALSE
+   ,only.contents=TRUE
+   ,comment=FALSE
+  )
+ ,file=paste0("./dados/ANM_CondExp_AmostrRejeicao.tex")
+)
+
+
+
+
+#+END_SRC
+
 
 \pagebreak
 
